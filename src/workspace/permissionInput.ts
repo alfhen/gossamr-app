@@ -88,7 +88,8 @@ export function lines(text: string): Seg[][] {
   return out;
 }
 
-const asText = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
+// JSON.stringify writes -0 as 0; the agent's input says -0, so the page does too.
+const asText = (value: unknown): string => (typeof value === "string" ? value : Object.is(value, -0) ? "-0" : (JSON.stringify(value, null, 2) ?? String(value)));
 /** The type of a value that isn't text, named beside its field, so `false` the value and "false" the text read apart. */
 const typeOf = (value: unknown): string | undefined => (typeof value === "string" ? undefined : value === null ? "null" : Array.isArray(value) ? "list" : typeof value);
 const text = (name: string, value: unknown): InputField => ({ name: segments(name), type: "text", lines: lines(asText(value)), ...(typeOf(value) ? { valueType: typeOf(value) } : {}) });

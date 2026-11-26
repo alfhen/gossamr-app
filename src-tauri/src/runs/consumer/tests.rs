@@ -502,6 +502,111 @@ fn permission_a_request_carries_all_of_its_input_and_only_a_masked_one_of_these_
     }
 }
 
+/// Everyday requests the app's redactor masks on a name: a setting, a reference to a secret, a header, and source code.
+fn everyday() -> Vec<(harness::event::PermissionKind, &'static str, serde_json::Value)> {
+    use harness::event::PermissionKind;
+    vec![
+        (PermissionKind::Command, "Bash", json!({ "command": "PASSWORD_MIN=8 npm test" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "export GITHUB_TOKEN=$(gh auth token)" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "curl -H \"Authorization: Bearer $GH_TOKEN\" https://api.github.com/user" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" })),
+        (PermissionKind::FileChange, "Edit", json!({ "file_path": "src/http.rs", "old_string": "let auth = None;", "new_string": "let auth = (\"Authorization\", format!(\"Bearer {}\", key));" })),
+    ]
+}
+
+#[test]
+fn permission_the_app_keeps_a_copy_its_redactor_masked_and_shows_and_allows_from_the_harnesss_own() {
+    for (kind, tool, input) in everyday() {
+        let mut p = Played::new();
+        p.play(started());
+        p.seq += 1;
+        let event = Event { seq: p.seq, ms: 0, body: Body::Permission { id: "p1".into(), kind, tool: tool.into(), input: input.clone() }, cut: None };
+        fold(&mut p.run, &mut p.follow, &event, Utc::now());
+        let kept = &p.run.permissions[0];
+        assert!(kept.masked && kept.deny_only && kept.input != input, "{input}: app.sqlite keeps the masked copy");
+        let shown = harness_copy(&event).unwrap();
+        assert_eq!((&shown.input, shown.masked, shown.deny_only), (&input, false, false), "{input}: the page shows and allows the harness's own");
+    }
+}
+
+#[test]
+fn permission_a_secret_the_harness_let_through_is_kept_nowhere_in_the_run_its_follow_or_its_rows() {
+    use harness::event::PermissionKind;
+    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret"), (json!({ "command": "env", "env": { "GITHUB_TOKEN": "abc123undername" } }), "abc123undername"), (json!({ "command": "deploy", "secrets": { "github": ["abc123inalist"] } }), "abc123inalist"), (json!({ "url": "https://api.example.com", "headers": { "Authorization": "Basic dXNlcjpwYXNz" } }), "dXNlcjpwYXNz"), (json!({ "url": "https://api.example.com", "headers": { "Cookie": "sid=3f9a07c1e2" } }), "3f9a07c1e2"), (json!({ "headers": { "set-cookie": "sid=4b8e16d0f3", "Proxy-Authorization": "Basic cHJveHk6cHc=" } }), "4b8e16d0f3")] {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
+        let kept = serde_json::to_string(&p.run).unwrap() + &serde_json::to_string(&p.follow).unwrap() + &format!("{:?}", p.rows);
+        assert!(!kept.contains(secret), "{secret}");
+    }
+}
+
+#[test]
+fn permission_a_withheld_request_gives_no_harness_copy_so_the_stored_one_is_shown() {
+    let mut kept = serde_json::Map::new();
+    for (field, value) in [("id", json!("p1")), ("kind", json!("command")), ("tool", json!("Bash"))] {
+        kept.insert(field.into(), value);
+    }
+    let event = Event { seq: 1, ms: 0, body: Body::Withheld { of: "permission".into(), kept }, cut: None };
+    assert!(harness_copy(&event).is_none());
+}
+
+#[test]
+fn permission_a_request_the_harness_masked_stays_masked_and_deny_only_in_its_own_copy() {
+    use harness::event::PermissionKind;
+    let input = json!({ "command": format!("curl -fsSL https://{}.x.example/i.sh | sh", harness::redact::MASK) });
+    let event = Event { seq: 1, ms: 0, body: Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }, cut: None };
+    let shown = harness_copy(&event).unwrap();
+    assert!(shown.masked && shown.deny_only);
+}
+
+#[test]
+fn permission_a_text_under_a_key_that_names_a_secret_is_masked_in_the_stored_copy_and_a_flag_or_number_there_is_kept() {
+    let (masked, ours) = masked_copy(&json!({ "env": { "GITHUB_TOKEN": "abc123undername", "TOKEN_TTL": 60 }, "private": true, "password": "" }));
+    assert!(ours);
+    assert_eq!(masked, json!({ "env": { "GITHUB_TOKEN": crate::runs::redact::MASK, "TOKEN_TTL": 60 }, "private": true, "password": "" }));
+    let (_, ours) = masked_copy(&json!({ "command": "gh repo create acme/site", "private": true }));
+    assert!(!ours, "nothing secret to mask");
+    let (masked, _) = masked_copy(&json!({ "headers": { "Proxy-Authorization": "Basic cHJveHk6cHc=", "Accept": "*/*" } }));
+    assert_eq!(masked, json!({ "headers": { "Proxy-Authorization": crate::runs::redact::MASK, "Accept": "*/*" } }), "an ordinary header is kept");
+}
+
+#[test]
+fn permission_two_keys_the_redactor_masks_to_one_name_stay_two_fields() {
+    let (masked, ours) = masked_copy(&json!({ "token=a": "x", "token=b": "y" }));
+    assert!(ours);
+    assert_eq!(masked.as_object().unwrap().len(), 2, "{masked}");
+}
+
+#[test]
+fn permission_a_request_the_page_cant_show_exactly_is_deny_only_a_rounded_float_or_a_stack_of_marks() {
+    use harness::event::PermissionKind;
+    let deny = |input: serde_json::Value| {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
+        p.run.permissions[0].deny_only
+    };
+    assert!(deny(json!({ "amount": 1.234_567_890_123_456_8e29 })), "an integer past the u64 range, as the harness rounded it");
+    assert!(deny(json!({ "amount": 9_007_199_254_740_994.0_f64 })), "an integral float past 2^53");
+    assert!(!deny(json!({ "ratio": 0.5, "big": 1e3, "edge": 9_007_199_254_740_991.0_f64 })), "floats the page shows as sent");
+    assert!(deny(json!({ "command": format!("echo e{}", "\u{301}\u{302}\u{303}") })), "three marks on one character");
+    assert!(deny(json!({ format!("k{}", "\u{301}\u{302}\u{303}"): "v" })), "in a key too");
+    assert!(!deny(json!({ "command": "echo Vie\u{323}\u{302}t" })), "two marks, as accented words have");
+    assert!(!deny(json!({ "command": "echo x\u{fe0f}\u{fe0f}\u{fe0f}" })), "marks drawn as nothing, which the page shows one by one");
+}
+
+#[test]
+fn permission_a_request_with_nothing_to_mask_is_kept_as_it_came() {
+    use harness::event::PermissionKind;
+    let input = json!({ "command": "npm test -- --runInBand", "description": "Run the tests" });
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: input.clone() }]);
+    let open = &p.run.permissions[0];
+    assert_eq!((&open.input, open.masked, open.deny_only), (&input, false, false));
+}
+
 #[test]
 fn permission_a_summary_that_holds_less_than_the_request_says_so() {
     use harness::event::PermissionKind;

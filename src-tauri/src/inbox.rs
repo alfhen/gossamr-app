@@ -13,7 +13,7 @@ use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{derive, my_actions, NewEvent};
 use crate::domain::{
-    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, ItemRef, PersonRef, Visible, WorkItem, Workflow,
+    Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, ItemRef, PersonRef, Run, RunQuery, Visible, WorkItem, Workflow,
 };
 use crate::model::{CachedTicket, Person, Status, Transition};
 use crate::proposals;
@@ -240,6 +240,10 @@ pub struct Core {
     pub(crate) launching: Arc<tokio::sync::Mutex<()>>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
+    /// The harness's own copy of each open permission request, by run and request: what the page shows and an allow is
+    /// judged on. `app.sqlite` keeps only the copy the app's redactor masked, so this one lives in memory, and a restart
+    /// reads it again from the harness's events.
+    shown: Mutex<HashMap<(String, String), crate::domain::PermissionRequest>>,
 }
 
 /// What a sync left behind.
@@ -251,6 +255,46 @@ pub struct Synced {
     pub proposals_changed: bool,
     /// Whether the watch settings changed, as when a small catalog was watched whole.
     pub watch_changed: bool,
+}
+
+impl Core {
+    /// Keeps the harness's own copy of an open request of `run_id`, to show and to judge an allow on.
+    pub fn keep_shown(&self, run_id: &str, copy: crate::domain::PermissionRequest) {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).insert((run_id.to_owned(), copy.id.clone()), copy);
+    }
+
+    /// Whether the harness's own copy of a request is held.
+    pub fn holds_shown(&self, run_id: &str, request: &str) -> bool {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&(run_id.to_owned(), request.to_owned()))
+    }
+
+    /// Forgets the copies of `run`'s requests that are no longer open.
+    pub fn prune_shown(&self, run: &Run) {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).retain(|(of, id), _| of != &run.id || run.permissions.iter().any(|open| open.id == *id));
+    }
+
+    /// `run` as the page sees it: each open request the harness's own copy where one is held. Without one it is the copy
+    /// `app.sqlite` keeps, which is masked, so deny-only, wherever the app's redactor masked anything. Never saved.
+    pub fn shown(&self, mut run: Run) -> Run {
+        let held = self.shown.lock().unwrap_or_else(|e| e.into_inner());
+        for open in &mut run.permissions {
+            if let Some(copy) = held.get(&(run.id.clone(), open.id.clone())) {
+                *open = copy.clone();
+            }
+        }
+        run
+    }
+
+    /// The runs as the page sees them (`shown`).
+    pub async fn runs_shown(&self, query: &RunQuery) -> Result<Vec<Run>> {
+        Ok(self.runs_list(query).await?.into_iter().map(|run| self.shown(run)).collect())
+    }
+
+    /// Forgets every copy, as a restart of the app does.
+    #[cfg(test)]
+    pub fn forget_shown(&self) {
+        self.shown.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
 }
 
 impl Core {
@@ -270,6 +314,7 @@ impl Core {
             codex_models: Default::default(),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
+            shown: Mutex::new(HashMap::new()),
             asks: Asks::default(),
             wake: Notify::new(),
             sign_in: tokio::sync::Mutex::new(()),

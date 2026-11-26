@@ -1958,22 +1958,89 @@ async fn permission_a_request_the_harness_masked_part_of_says_so_and_can_only_be
     assert_eq!(answers(&served, &done).await, [(open.id, Decision::Deny, None)]);
 }
 
+/// `PERMITS` asking one request of `kind` with `tool` and `input` instead.
+fn permits(kind: &str, tool: &str, input: &serde_json::Value) -> String {
+    let asked = serde_json::json!({ "permission": { "kind": kind, "tool": tool, "input": input } });
+    format!("{{\"prompt\": null}}\n{asked}\n{{\"say\": \"Went on after the answer.\"}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}")
+}
+
+#[tokio::test]
+async fn permission_an_everyday_request_the_apps_redactor_masks_shows_whole_and_can_be_allowed_while_app_sqlite_keeps_it_masked() {
+    let cases = [
+        ("command", "Bash", serde_json::json!({ "command": "PASSWORD_MIN=8 npm test" }), None),
+        ("command", "Bash", serde_json::json!({ "command": "export GITHUB_TOKEN=$(gh auth token)" }), None),
+        ("command", "Bash", serde_json::json!({ "command": "curl -H \"Authorization: Bearer $GH_TOKEN\" https://api.github.com/user" }), Some("api.github.com/user")),
+        ("command", "Bash", serde_json::json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), Some("abc123secretvalue")),
+        ("command", "Bash", serde_json::json!({ "command": "mysql --password=hunter2 -u root" }), Some("hunter2")),
+        ("file_change", "Edit", serde_json::json!({ "file_path": "src/http.rs", "old_string": "let auth = None;", "new_string": "let auth = (\"Authorization\", format!(\"Bearer {}\", key));" }), None),
+    ];
+    for (kind, tool, input, kept_nowhere) in cases {
+        let served = Served::new(&permits(kind, tool, &input), 4);
+        let rig = on_harness(&served).await;
+        let run = rig.launched(1).await;
+        until_state(&rig, &run, RunState::NeedsPermission).await;
+        let stored = rig.get(&run).await.permissions[0].clone();
+        assert!(stored.masked && stored.input != input, "{input}: app.sqlite keeps the app-masked copy");
+        let shown = rig.fx.core.shown(rig.get(&run).await).permissions[0].clone();
+        assert_eq!((&shown.input, shown.masked, shown.deny_only), (&input, false, false), "{input}: the page sees what an allow runs");
+        assert_eq!(rig.fx.core.runs_shown(&crate::domain::RunQuery::default()).await.unwrap().iter().find(|r| r.id == run.id).unwrap().permissions[0], shown, "the page's list");
+        if let Some(secret) = kept_nowhere {
+            for file in ["app.sqlite", "app.sqlite-wal"] {
+                let bytes = std::fs::read(rig.fx.dir.join(file)).unwrap_or_default();
+                assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "{secret} in {file}");
+            }
+        }
+        rig.svc.answer_permission(&run.id, &shown.id, Decision::Allow).await.unwrap();
+        let done = until_state(&rig, &run, RunState::Done).await;
+        assert_eq!(answers(&served, &done).await, [(shown.id, Decision::Allow, None)], "{input}");
+    }
+}
+
+#[tokio::test]
+async fn permission_a_request_whose_harness_copy_the_app_no_longer_holds_shows_its_masked_copy_and_can_only_be_denied() {
+    let input = serde_json::json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" });
+    let served = Served::new(&permits("command", "Bash", &input), 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let id = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].id.clone();
+    rig.fx.core.forget_shown();
+    let shown = rig.fx.core.shown(rig.get(&run).await).permissions[0].clone();
+    assert!(shown.masked && shown.deny_only && !shown.input.to_string().contains("abc123secretvalue"));
+    assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, ONLY_DENY_MASKED);
+}
+
 #[tokio::test]
 async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with_no_whole_input_whatever_its_flag_says() {
     let served = Served::new(PERMITS, 4);
     let rig = on_harness(&served).await;
     let run = rig.launched(1).await;
     let id = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].id.clone();
-    for (input, masked, why) in [(None, true, ONLY_DENY_MASKED), (Some(serde_json::Value::Null), false, ONLY_DENY_KIND), (Some(serde_json::json!("git com")), false, ONLY_DENY_CUT), (Some(serde_json::json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })), false, ONLY_DENY_INEXACT)] {
-        rig.set(&run, |run| {
-            let open = &mut run.permissions[0];
-            (open.masked, open.deny_only) = (masked, false);
-            if let Some(input) = input {
+    let marks = format!("echo e{}", "\u{301}\u{302}\u{303}");
+    let cases = [
+        (None, true, PermissionKind::Command, ONLY_DENY_MASKED),
+        (Some(serde_json::Value::Null), false, PermissionKind::Command, ONLY_DENY_KIND),
+        (Some(serde_json::json!("git com")), false, PermissionKind::Command, ONLY_DENY_CUT),
+        (Some(serde_json::json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })), false, PermissionKind::Command, ONLY_DENY_INEXACT),
+        (Some(serde_json::json!({ "amount": 1.234_567_890_123_456_8e29 })), false, PermissionKind::Command, ONLY_DENY_INEXACT),
+        (Some(serde_json::json!({ "command": marks })), false, PermissionKind::Command, ONLY_DENY_MARKS),
+        (Some(serde_json::json!({ "command": "ls" })), false, PermissionKind::Other, ONLY_DENY_KIND),
+    ];
+    let held = rig.fx.core.shown(rig.get(&run).await).permissions[0].clone();
+    for (input, masked, kind, why) in cases {
+        let tamper = |open: &mut crate::domain::PermissionRequest| {
+            (open.masked, open.deny_only, open.kind) = (masked, false, kind);
+            if let Some(input) = input.clone() {
                 open.input = input;
             }
-        })
-        .await;
-        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why);
+        };
+        // Once in the harness's copy the app holds, which the command judges; once in the stored copy, with none held.
+        let mut copy = held.clone();
+        tamper(&mut copy);
+        rig.fx.core.keep_shown(&run.id, copy);
+        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why, "{kind:?}, held");
+        rig.fx.core.forget_shown();
+        rig.set(&run, |run| tamper(&mut run.permissions[0])).await;
+        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why, "{kind:?}, stored");
     }
     assert!(answers(&served, &run).await.is_empty(), "none reached the harness");
     rig.svc.answer_permission(&run.id, &id, Decision::Deny).await.unwrap();

@@ -127,8 +127,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             }
         }
         Body::Permission { id, kind, tool, input } => {
-            let what = summary(&tool, &input, event.cut.is_some());
-            let asked = request(id.clone(), kind, tool, input, event.cut.is_some());
+            let harness_cut = event.cut.is_some();
+            let asked = request(id.clone(), kind, tool.clone(), input, harness_cut);
+            let what = summary(&tool, &asked.input, harness_cut);
             follow.permissions.push((id, asked.deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
             run.permissions.push(asked);
             rows.add("ask", &format!("Asks to use {what}"), None);
@@ -603,11 +604,33 @@ fn describe(name: &str, input: &Value) -> String {
     }
 }
 
-/// A permission request as the run keeps it. A kind this build does not know is still a request, one the person can
-/// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
+/// A permission request as `app.sqlite` keeps it: with the app's own redactor run over it, so a secret the harness let
+/// through is never stored. It is masked, so deny-only, wherever that masked anything; the page shows and judges an allow
+/// on the harness's own copy (`harness_copy`) instead, held in memory, and falls back to this one only without it.
 fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
-    let masked = holds_mask(&input);
-    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input);
+    build(id, kind, tool, input, cut, true)
+}
+
+/// The harness's own copy of the permission request an event asks, masked only by the harness: what the page shows, and
+/// what an allow sends, since an allow sends the driver's own copy. A withheld one has no input to show.
+pub fn harness_copy(event: &Event) -> Option<PermissionRequest> {
+    // A withheld event has lost its input, so the stored copy shows more of it.
+    if matches!(event.body, Body::Withheld { .. }) {
+        return None;
+    }
+    match readable(&event.body)? {
+        Body::Permission { id, kind, tool, input } => Some(build(id, kind, tool, input, event.cut.is_some(), false)),
+        _ => None,
+    }
+}
+
+/// A permission request. A kind this build does not know is still a request, one the person can only deny, as is one
+/// cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept. `ours`: run the app's
+/// redactor over it too.
+fn build(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool, ours: bool) -> PermissionRequest {
+    let (input, ours) = if ours { masked_copy(&input) } else { (input, false) };
+    let masked = ours || holds_mask(&input);
+    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input) || stacks_marks(&input);
     PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
 }
 
@@ -625,10 +648,67 @@ fn holds_more(input: &Value) -> bool {
 pub(super) fn shows_exactly(value: &Value) -> bool {
     const SAFE: u64 = (1 << 53) - 1;
     match value {
+        // An integer past the `u64` or `i64` range, or written as a float, arrives as an `f64` the harness already rounded.
+        Value::Number(n) if n.is_f64() => n.as_f64().is_none_or(|f| f.fract() != 0.0 || f.abs() <= SAFE as f64),
         Value::Number(n) => n.as_u64().is_none_or(|n| n <= SAFE) && n.as_i64().is_none_or(|n| n.unsigned_abs() <= SAFE),
         Value::Array(items) => items.iter().all(shows_exactly),
         Value::Object(fields) => fields.values().all(shows_exactly),
         _ => true,
+    }
+}
+
+/// `value` with the app's redactor run over every text in it, keys and values, and whether that masked anything.
+fn masked_copy(value: &Value) -> (Value, bool) {
+    masked_under(value, false)
+}
+
+/// `masked_copy`, where `secret` says the value sits under a key that names a secret (`GITHUB_TOKEN`, `Authorization`): then
+/// every text in it is masked whole, since `redact` sees the text alone. A number or a flag there is kept, so
+/// `"private": true` stays readable.
+fn masked_under(value: &Value, secret: bool) -> (Value, bool) {
+    match value {
+        Value::String(text) if secret && !text.is_empty() => (Value::String(super::redact::MASK.to_owned()), true),
+        Value::String(text) => {
+            let out = redact(text);
+            let masked = out != *text;
+            (Value::String(out), masked)
+        }
+        Value::Array(items) => {
+            let (items, masked): (Vec<_>, Vec<_>) = items.iter().map(|item| masked_under(item, secret)).unzip();
+            (Value::Array(items), masked.into_iter().any(|m| m))
+        }
+        Value::Object(fields) => {
+            let mut masked = false;
+            let mut out = serde_json::Map::new();
+            for (key, value) in fields {
+                let mut name = redact(key);
+                masked |= name != *key;
+                // Two keys that mask to one name stay two fields, numbered as the harness numbers them.
+                let base = name.clone();
+                let mut n = 2;
+                while out.contains_key(&name) {
+                    name = format!("{base} {n}");
+                    n += 1;
+                }
+                let (value, inner) = masked_under(value, secret || super::redact::is_secret_key(key));
+                masked |= inner;
+                out.insert(name, value);
+            }
+            (Value::Object(out), masked)
+        }
+        other => (other.clone(), false),
+    }
+}
+
+/// Whether a key or a text in it stacks more than two combining marks on one character, which the page shows only as a
+/// count, not as which marks they are. Marks Unicode draws as nothing are shown one by one there, so they don't count.
+pub(super) fn stacks_marks(value: &Value) -> bool {
+    static STACK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"[\p{Mn}\p{Me}--\p{Default_Ignorable_Code_Point}]{3,}").expect("a valid pattern"));
+    match value {
+        Value::String(text) => STACK.is_match(text),
+        Value::Array(items) => items.iter().any(stacks_marks),
+        Value::Object(fields) => fields.iter().any(|(key, value)| STACK.is_match(key) || stacks_marks(value)),
+        _ => false,
     }
 }
 
