@@ -1470,7 +1470,7 @@ export class MockRuns {
     };
   }
 
-  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream" };
+  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream", permissions: "auto" };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
   /** The run of every answer tried, refused or not, oldest first. */
@@ -1493,6 +1493,8 @@ export class MockRuns {
       terminal: settings.terminal,
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
+      // A value the backend doesn't know asks for each step, as its config reader does.
+      permissions: settings.permissions === undefined ? "auto" : settings.permissions === "auto" ? "auto" : "ask",
     };
     return this.limits;
   }

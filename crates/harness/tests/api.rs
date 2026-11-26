@@ -79,7 +79,7 @@ async fn open(client: &mut Client) -> String {
 }
 
 async fn open_as(client: &mut Client, locked: bool, ends_with_client: bool) -> String {
-    let opened = client.call(Op::Open { provider: "mock".into(), cwd: Some("/nowhere".into()), repo: None, base: None, branch: None, locked, model: None, login: None, effort: None, ends_with_client, tools: tools(), result_schema: None }).await.unwrap();
+    let opened = client.call(Op::Open { provider: "mock".into(), cwd: Some("/nowhere".into()), repo: None, base: None, branch: None, locked, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client, tools: tools(), result_schema: None }).await.unwrap();
     opened["session"].as_str().unwrap().to_owned()
 }
 
@@ -1140,7 +1140,7 @@ async fn shutdown_a_client_that_asks_once_it_has_begun_is_told_so() {
     let harness = server.harness().clone();
     let task = tokio::spawn(server.run());
     let (mut asking, mut late) = (Client::connect(&dir, &token).await.unwrap(), Client::connect(&dir, &token).await.unwrap());
-    let opened = asking.call(Op::Open { provider: "stuck".into(), cwd: Some("/nowhere".into()), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None }).await.unwrap();
+    let opened = asking.call(Op::Open { provider: "stuck".into(), cwd: Some("/nowhere".into()), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None }).await.unwrap();
     let id = opened["session"].as_str().unwrap().to_owned();
     let mut events = harness.subscribe(&id).unwrap();
     asking.call(Op::Send { session: id, text: "run".into() }).await.unwrap();
@@ -1346,7 +1346,7 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_clau
     // session's own run is judged.
     let _ = std::fs::remove_file(out.join("report.txt"));
     let cwd = tmp.path().to_path_buf();
-    let open = Op::Open { provider: "claude".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
+    let open = Op::Open { provider: "claude".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None };
     let id = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();
     let prompt = std::fs::read_to_string(&fixture).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).find(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user").unwrap();
     client.call(Op::Send { session: id.clone(), text: prompt["data"]["message"]["content"][0]["text"].as_str().unwrap().into() }).await.unwrap();

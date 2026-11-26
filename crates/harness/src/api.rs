@@ -125,6 +125,11 @@ pub enum Op {
         /// Left out, the provider's own.
         #[serde(default)]
         effort: Option<String>,
+        /// Who settles the agent's permission prompts first: `ask` (left out) sends each to the client; `auto` starts the
+        /// provider's auto mode, where its driver has one (Claude's `--permission-mode auto`), on every start and
+        /// resume, and only what that leaves comes to the client. A locked session ignores it.
+        #[serde(default)]
+        permissions: crate::driver::Permissions,
         /// The session is closed when this connection ends, and is never resumed.
         #[serde(default)]
         ends_with_client: bool,

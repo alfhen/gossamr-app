@@ -14,6 +14,16 @@ pub use harness::provider::{valid_model_id, ModelOption, DEFAULT_MODEL, MODEL_ID
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const CUSTOM_MODEL_LIMIT: usize = 20;
 
+/// Who settles a Claude agent's permission prompts first: Claude Code's auto mode (`auto`, the default) or you, for
+/// each step (`ask`). Pip's locked profile never changes with it.
+pub use harness::driver::Permissions as AgentPermissions;
+
+/// Reads `agents.permissions` of `config.json`: a value this build does not know asks for each step, the start that
+/// passes nothing, and leaves the other agent settings as they are.
+pub fn read_agent_permissions<'de, D: Deserializer<'de>>(deserializer: D) -> Result<AgentPermissions, D::Error> {
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or(AgentPermissions::Ask))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelChoice {

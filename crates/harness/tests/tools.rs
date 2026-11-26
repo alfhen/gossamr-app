@@ -176,6 +176,7 @@ async fn tools_endpoint_a_client_token_is_refused_and_looks_like_any_wrong_token
         model: None,
         login: None,
         effort: None,
+        permissions: Default::default(),
         ends_with_client: false,
         tools: tools(),
         result_schema: None,

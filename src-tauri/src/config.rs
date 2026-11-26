@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::connections::{self, Instance, ProviderInstance, VERSION};
 use crate::error::Result;
-use crate::model_choice::ModelDefaults;
+use crate::model_choice::{AgentPermissions, ModelDefaults};
 use crate::runs::notices::NoticeMode;
 
 const FILE: &str = "config.json";
@@ -38,6 +38,9 @@ pub struct AgentSettings {
     pub max_runs: usize,
     pub terminal: TerminalChoice,
     pub notifications: NoticeMode,
+    /// Who settles a Claude agent's permission prompts first. Codex's own sandbox setting decides for Codex.
+    #[serde(deserialize_with = "crate::model_choice::read_agent_permissions")]
+    pub permissions: AgentPermissions,
 }
 
 impl Default for AgentSettings {
@@ -46,6 +49,7 @@ impl Default for AgentSettings {
             max_runs: 3,
             terminal: TerminalChoice::Terminal,
             notifications: NoticeMode::Workstream,
+            permissions: AgentPermissions::Auto,
         }
     }
 }
@@ -56,6 +60,7 @@ impl AgentSettings {
             max_runs: self.max_runs.clamp(*MAX_RUNS.start(), *MAX_RUNS.end()),
             terminal: self.terminal,
             notifications: self.notifications,
+            permissions: self.permissions,
         }
     }
 }
@@ -416,7 +421,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-config-limits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, notifications: NoticeMode::Workstream });
+        assert_eq!(AppConfig::load(&dir).agents, AgentSettings { max_runs: 3, terminal: TerminalChoice::Terminal, notifications: NoticeMode::Workstream, permissions: AgentPermissions::Auto });
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":99,"wallClockMinutes":4294967295,"tokenCap":0,"terminal":"iTerm"}}"#).unwrap();
         let loaded = AppConfig::load(&dir).agents;
         assert_eq!((loaded.max_runs, loaded.terminal), (6, TerminalChoice::ITerm), "keys of the removed limits are ignored");
@@ -427,6 +432,25 @@ mod tests {
         assert_eq!(AppConfig::load(&dir), chosen);
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":"many"}}"#).unwrap();
         assert_eq!(AppConfig::load(&dir).agents, AgentSettings::default(), "a bad value gives the defaults");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn agents_run_in_auto_mode_unless_the_file_says_ask_and_a_value_this_build_does_not_know_asks() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-permissions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2}}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents.permissions, AgentPermissions::Auto, "a missing key reads as auto");
+        AppConfig::update(&dir, |config| config.agents.permissions = AgentPermissions::Ask).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(saved["agents"]["permissions"], "ask");
+        assert_eq!(AppConfig::load(&dir).agents.permissions, AgentPermissions::Ask);
+        for unknown in [r#""bypassPermissions""#, "true", r#"{"mode":"auto"}"#] {
+            std::fs::write(dir.join(FILE), format!(r#"{{"agents":{{"maxRuns":2,"terminal":"iTerm","permissions":{unknown}}}}}"#)).unwrap();
+            let loaded = AppConfig::load(&dir).agents;
+            assert_eq!((loaded.permissions, loaded.max_runs, loaded.terminal), (AgentPermissions::Ask, 2, TerminalChoice::ITerm), "{unknown}: asks, and the rest is kept");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

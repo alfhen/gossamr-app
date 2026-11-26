@@ -170,6 +170,13 @@ H0 showed the person's own setup only partly for Codex and Gemini, because the p
 - **Regression test:** allow and deny reach the mock. With the setting on: an edit inside the worktree is allowed; an edit under `.git`, through a symlink out of the worktree, a command, and anything on a locked session are not. A Codex `grantRoot` request, a permissions request and a command are never auto-allowed; no answer carries `scope: session`; the Needs you item shows the whole command; on Gemini, Deny reads "Deny ends this turn".
 - **Acceptance:** `pnpm e2e e2e/permissions.spec.ts` passes (the two buttons, the whole command shown, "Deny ends this turn" on Gemini), and `cargo test -p gossamr permission_` passes.
 
+### H11c. Claude agents in auto mode
+
+- **Touches:** `crates/harness/src/claude/driver.rs`, `driver.rs`, `api.rs`, `session.rs`, `store.rs` (a step that keeps each session's choice), `src-tauri/src/config.rs`, `model_choice.rs`, `runs/on_harness.rs`, the agent settings sheet, the mock and e2e, AGENTS.md rule 4, `docs/agents-cli-findings.md`.
+- **Does:** a Settings choice, "Claude agents' permissions": Auto, the default, or Ask for each step. It is `agents.permissions` in `config.json`; a missing key reads as Auto, and a value this build does not know as Ask for each step. A run on the harness sends it as `permissions` on `open`; the harness keeps it with the session, and the Claude driver adds `--permission-mode auto` to a normal session's argv on every start and resume. Pip's locked sessions keep `dontAsk` and never get it. Codex is untouched: its own sandbox setting decides. When `init` says Claude started in another mode, as it does for a model auto mode does not support, the run's timeline says so once. Auto mode covers most of what H11's per-repo auto-allow of worktree edits was for: edits in the worktree and plain git ran with no request.
+- **Regression test:** the exact argv with Auto and with Ask, on a first start, on a resume after a harness restart (read from the store) and on a locked session; the notice when `init` names another mode, and none when it names auto or none at all; `config.json` with no key, `ask`, and an unknown value; a run opened on the mock harness lists `auto`, then `ask` once Settings say so.
+- **Acceptance (real, `cargo test -p gossamr -- --ignored auto_mode_real --nocapture`):** in auto mode, an edit of NOTES.md and a `git commit` run with no permission request, and the test prints what became of a pipe to `sh` and a push to another remote; `pnpm e2e e2e/agent-permissions.spec.ts` shows Auto by default and keeps Ask for each step.
+
 ### H12. Codex runs on the harness
 
 - **Touches:** `runs/service.rs`, the consumer, the mock and e2e.

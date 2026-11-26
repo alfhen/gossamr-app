@@ -12,6 +12,7 @@ use harness::claude::driver::ClaudeDriver;
 use harness::env::RunEnv;
 use harness::event::{Body, Decision, Event, FailKind, PermissionKind};
 use harness::process::{self, Listing, Process};
+use harness::driver::Permissions;
 use harness::session::{Harness, Open};
 use harness::store::Store;
 use harness::work::Setup;
@@ -568,7 +569,7 @@ async fn claude_the_token_is_in_no_argument_and_no_variable_of_the_agent() {
     .collect();
     let mut tools = harness::tools::ToolsEndpoint::unattached();
     tools.allowed = vec![format!("mcp__{}__result", tools.name)];
-    let launch = Launch { cwd: tmp.path().into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: token, tools, result_schema: None, env };
+    let launch = Launch { cwd: tmp.path().into(), locked: false, model: None, login: None, effort: None, permissions: Default::default(), resume: None, tools_token: token, tools, result_schema: None, env };
     let mut link = ClaudeDriver::new(REPLAY.into()).open(launch).unwrap();
     let Some(Act::Prompt(prompt, _)) = recorded_client(&lines_of(&fixture)).0.into_iter().next() else { panic!("6-model prompts") };
     link.commands.send(Command::Prompt(prompt)).unwrap();
@@ -682,7 +683,7 @@ fn direct_as(fixture: &Path, extra: &[(&str, &str)], driver: ClaudeDriver, locke
         [("PATH", "/usr/bin:/bin".to_owned()), ("WIRE_REPLAY_FIXTURE", fixture.display().to_string()), ("WIRE_REPLAY_OUT", out.display().to_string())].into_iter().map(|(k, v)| (k.into(), v.into())).collect();
     env.extend(extra.iter().map(|(k, v)| ((*k).into(), (*v).into())));
     let tools = harness::tools::ToolsEndpoint::unattached();
-    let launch = Launch { cwd: tmp.path().into(), locked, model: None, login: None, effort: None, resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
+    let launch = Launch { cwd: tmp.path().into(), locked, model: None, login: None, effort: None, permissions: Default::default(), resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
     (driver.open(launch).unwrap(), out, tmp)
 }
 
@@ -928,6 +929,51 @@ async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes
     assert_eq!(second.report(), "");
     second.harness.shutdown().await;
     assert_eq!(Store::open(&data).unwrap().agents().unwrap(), [], "its agent gone, nothing is on record");
+}
+
+#[tokio::test]
+async fn claude_auto_starts_in_auto_mode_and_a_resume_after_a_restart_starts_in_it_again() {
+    let (_tmp, data) = data_dir();
+    let fixture = native().join("2-permission.jsonl");
+    let first = rig_on(&fixture, &[], Some(&data), None);
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let spec = Open { provider: "claude".into(), cwd: first.tmp.path().to_path_buf(), permissions: Permissions::Auto, ..Open::default() };
+    let (id, mut events) = first.harness.open(spec).await.unwrap();
+    let (seen, _) = play_turns(&first, &id, &mut events, acts, results).await;
+    let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
+    want.extend(["--permission-mode".into(), "auto".into(), "--allowedTools".into(), allowed_for(&endpoint(&first).0)]);
+    want.extend(["--append-system-prompt".into(), harness::driver::guard(&OWN.iter().map(|tool| (*tool).to_owned()).collect::<Vec<_>>())]);
+    assert_eq!(first.argv(), want);
+    let session = provider_session(&seen);
+    assert_eq!(first.harness.shutdown().await, Vec::<String>::new());
+    // The next harness has only the store to go by.
+    let resume = native().join("4-resume.jsonl");
+    let second = rig_after(&resume, &[], &data).await;
+    let mut events = second.harness.resume_with(&id, Some(prompts(&resume).remove(0))).await.unwrap();
+    until(&mut events, |body| body.ends_turn()).await;
+    let argv = second.argv();
+    assert_eq!(resumes(&argv), [session]);
+    assert_eq!(argv[harness::claude::driver::STREAM.len()..][..2], ["--permission-mode", "auto"], "{argv:?}");
+    assert_eq!(argv.iter().filter(|arg| *arg == "--permission-mode").count(), 1);
+    second.harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    assert_eq!(second.report(), "");
+}
+
+#[tokio::test]
+async fn claude_auto_on_a_locked_session_changes_nothing_of_pips_lockdown() {
+    let fixture = native().join("11-locked.jsonl");
+    let rig = rig(&fixture, &[]);
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let recorded = |name: &&str| harness::tools::ToolSpec { name: (*name).into(), description: "Recorded.".into(), input_schema: json!({"type": "object"}) };
+    let tools = RECORDED_LOCKED.iter().map(recorded).collect();
+    let spec = Open { provider: "claude".into(), cwd: rig.tmp.path().to_path_buf(), locked: true, permissions: Permissions::Auto, tools, ..Open::default() };
+    let (id, mut events) = rig.harness.open(spec).await.unwrap();
+    drive(&rig, &id, &mut events, acts, results).await;
+    let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
+    want.extend(harness::claude::driver::LOCKED.iter().map(|flag| (*flag).to_owned()));
+    want.extend(["--allowedTools".into(), locked_allowed_for(&endpoint(&rig).0)]);
+    assert_eq!(rig.argv(), want, "dontAsk, and no auto");
 }
 
 #[tokio::test]

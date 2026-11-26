@@ -87,7 +87,7 @@ impl Bed {
         let run = self.rig.set(&run, |r| r.state = RunState::Launching).await;
         let cwd = self.served._tmp.path().to_path_buf();
         let tools = vec![harness::tools::ToolSpec { name: "read_ticket".into(), description: String::new(), input_schema: json!({ "type": "object" }) }];
-        let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools, result_schema: None };
+        let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools, result_schema: None };
         let session = self.link.open(&run.id, open).await.unwrap();
         self.link.call(Op::Send { session: session.clone(), text: "the brief".into() }).await.unwrap();
         (run, session)
@@ -346,7 +346,7 @@ async fn events_the_harness_lost_are_named_once_each_time_and_the_run_reads_on_w
     // The first turn plays out before the app follows the session, and its record is then cut short.
     let mut client = bed.served.client().await;
     let cwd = bed.served._tmp.path().to_path_buf();
-    let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
+    let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None };
     let session = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();
     turn_away(&mut client, &session, "the brief").await;
     let first_end = bed.served.client().await.call(Op::Sessions).await.unwrap().as_array().unwrap().iter().find(|s| s["id"] == session.as_str()).unwrap()["last_seq"].as_u64().unwrap();

@@ -435,7 +435,7 @@ impl Client {
         let harness = self.harness.clone();
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
-            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, ends_with_client, tools, result_schema } => {
+            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, permissions, ends_with_client, tools, result_schema } => {
                 self.captured().await;
                 harness.check_open(&provider, login.as_deref(), effort.as_deref())?;
                 crate::tools::check_tools(&tools, result_schema.as_ref())?;
@@ -450,7 +450,7 @@ impl Client {
                     }
                     _ => return Err(Error::Refused("give cwd or repo, and not both".into())),
                 };
-                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), notices, tools, result_schema };
+                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, permissions, work: work.clone(), notices, tools, result_schema };
                 // A clone can take minutes, and the token may have been revoked meanwhile. The clone stays, as the
                 // harness's own, for the next session; the worktree goes, and no session is made.
                 let opened = match harness.client_tokens().map(|tokens| tokens.iter().any(|token| token.stored_key == self.key)) {

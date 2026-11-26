@@ -79,13 +79,42 @@ async fn an_approved_run_opens_a_harness_session_sends_its_brief_and_reads_done_
 fn the_mock_works_in_the_clone_and_any_other_provider_in_a_worktree_on_the_runs_branch() {
     let run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
     let work = Some("~/.claude-work".to_owned());
-    let Op::Open { cwd, repo, base, branch, model, effort, login, .. } = open_op(&run, "mock", None, work.clone()) else { unreachable!() };
+    let Op::Open { cwd, repo, base, branch, model, effort, login, .. } = open_op(&run, "mock", None, work.clone(), AgentPermissions::Auto) else { unreachable!() };
     assert_eq!((cwd, repo, base, branch, model, effort, login), (Some(run.spec.clone_path.clone()), None, None, None, None, None, None));
-    let Op::Open { cwd, repo, base, branch, model, effort, login, .. } = open_op(&run, "claude", Some("opus".into()), work.clone()) else { unreachable!() };
+    let Op::Open { cwd, repo, base, branch, model, effort, login, .. } = open_op(&run, "claude", Some("opus".into()), work.clone(), AgentPermissions::Auto) else { unreachable!() };
     assert_eq!((cwd, repo, base, branch), (None, Some(run.spec.repo.clone()), Some(run.spec.base.clone()), Some(run.spec.name.clone())));
     assert_eq!((model.as_deref(), effort, login), (Some("opus"), None, work), "its login as typed, and no effort: the provider's own");
-    let Op::Open { login, model, .. } = open_op(&run, "claude", None, None) else { unreachable!() };
+    let Op::Open { login, model, .. } = open_op(&run, "claude", None, None, AgentPermissions::Ask) else { unreachable!() };
     assert_eq!((login, model), (None, None), "the usual setup and model when none was chosen");
+}
+
+#[test]
+fn the_open_carries_the_agents_permissions_as_given() {
+    let run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
+    for permissions in [AgentPermissions::Auto, AgentPermissions::Ask] {
+        let Op::Open { permissions: sent, locked, .. } = open_op(&run, "claude", None, None, permissions) else { unreachable!() };
+        assert_eq!((sent, locked), (permissions, false));
+    }
+}
+
+#[tokio::test]
+async fn a_run_opens_its_session_in_auto_mode_unless_settings_say_ask_for_each_step() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let opened_with = |run: Run| {
+        let served = &served;
+        async move {
+            let session = run.harness_session.expect("opened on the harness");
+            let listed = sessions(served).await.into_iter().find(|row| row["id"] == session.as_str()).expect("listed");
+            listed["permissions"].clone()
+        }
+    };
+    assert_eq!(rig.svc.settings().permissions, AgentPermissions::Auto, "the default");
+    let first = rig.launched(1).await;
+    assert_eq!(opened_with(until_state(&rig, &first, RunState::Done).await).await, "auto");
+    rig.svc.set_settings(crate::config::AgentSettings { permissions: AgentPermissions::Ask, ..rig.svc.settings() }).unwrap();
+    let second = rig.launched(2).await;
+    assert_eq!(opened_with(until_state(&rig, &second, RunState::Done).await).await, "ask");
 }
 
 #[test]
@@ -166,7 +195,7 @@ async fn a_session_the_app_could_not_bind_to_its_run_is_closed_and_not_left_runn
     let run = rig.launched(1).await;
     until_state(&rig, &run, RunState::NeedsAnswer).await;
     let link = &rig.svc.harness.as_ref().unwrap().link;
-    assert!(link.open(&run.id, open_op(&run, MOCK, None, None)).await.is_err(), "a run follows one session");
+    assert!(link.open(&run.id, open_op(&run, MOCK, None, None, AgentPermissions::Auto)).await.is_err(), "a run follows one session");
     let mut client = served.client().await;
     let second = sessions(&served).await.into_iter().find(|s| s["id"] != run.harness_session.as_deref().unwrap_or_default()).unwrap();
     let closed = client.call(Op::Events { session: second["id"].as_str().unwrap().into(), after: 0 }).await.unwrap();
@@ -180,7 +209,7 @@ async fn at_start_a_run_whose_session_never_got_its_brief_fails_and_its_session_
     let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
     let run = rig.set(&run, |r| r.state = RunState::Launching).await;
     let link = &rig.svc.harness.as_ref().unwrap().link;
-    let session = link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap();
+    let session = link.open(&run.id, open_op(&run, MOCK, None, None, AgentPermissions::Auto)).await.unwrap();
     rig.svc.sweep_harness().await;
     let failed = rig.get(&run).await;
     assert_eq!((failed.state, failed.error.as_deref().is_some_and(|e| e.contains("before it sent the agent its brief"))), (RunState::Failed, true));
@@ -342,7 +371,7 @@ async fn at_start_the_session_of_a_failed_run_that_never_got_its_brief_closes_an
     let rig = on_harness(&served).await;
     let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
     let run = rig.set(&run, |r| r.state = RunState::Launching).await;
-    let session = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap();
+    let session = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None, AgentPermissions::Auto)).await.unwrap();
     let failed = rig.set(&run, |r| {
         r.state = RunState::Failed;
         r.error = Some("its own reason".into());
@@ -359,7 +388,7 @@ async fn a_failed_bind_says_so_in_the_apps_words_and_shows_no_database_text() {
     let rig = on_harness(&served).await;
     let run = rig.launched(1).await;
     until_state(&rig, &run, RunState::NeedsAnswer).await;
-    let refused = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap_err();
+    let refused = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None, AgentPermissions::Auto)).await.unwrap_err();
     assert_eq!(refused, "it opened a session but Gossamr couldn't keep it with its run");
 }
 
@@ -377,7 +406,7 @@ async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_a
     served.serve_on(WORKS_LONG, 4, setup);
     let rig = on_harness(&served).await;
     let mut client = served.client().await;
-    let open = |branch: &str| Op::Open { provider: MOCK.into(), cwd: None, repo: Some("acme/webshop".into()), base: Some("main".into()), branch: Some(branch.into()), locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
+    let open = |branch: &str| Op::Open { provider: MOCK.into(), cwd: None, repo: Some("acme/webshop".into()), base: Some("main".into()), branch: Some(branch.into()), locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None };
     let interrupted = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
     let interrupted = rig.set(&interrupted, |r| {
         r.state = RunState::Launching;

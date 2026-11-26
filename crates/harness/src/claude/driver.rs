@@ -23,7 +23,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::binary::CliPlaces;
-use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, guard};
+use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, Permissions, guard};
 use crate::env::RunEnv;
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::process::{self, Process};
@@ -36,6 +36,13 @@ pub const STREAM: &[&str] =
 /// Pip's lockdown, for a locked session: no built-in tool, no settings, skills or slash commands, and no MCP server but
 /// the session's own. Ticket text is untrusted, so loosening one of these lets it reach files, a shell or the network.
 pub const LOCKED: &[&str] = &["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"];
+
+/// A normal session's mode when the client asks for auto (`Permissions::Auto`). Where auto mode is not available to
+/// the login (an admin's `disableAutoMode`, a model it does not support), Claude starts in Manual instead.
+pub const AUTO: &[&str] = &["--permission-mode", "auto"];
+
+/// What a session that asked for auto mode is told when Claude started in another mode.
+pub const NO_AUTO: &str = "Auto mode isn't available to this Claude login or model, so the agent asks for each step.";
 
 /// How long a stopped agent has before its process group gets SIGTERM, while a background task keeps it.
 pub const TERM_AFTER: Duration = Duration::from_secs(3);
@@ -153,6 +160,9 @@ pub fn args(launch: &Launch) -> Vec<String> {
     let mut args: Vec<String> = STREAM.iter().map(|flag| (*flag).to_owned()).collect();
     if launch.locked {
         args.extend(LOCKED.iter().map(|flag| (*flag).to_owned()));
+    } else if launch.permissions == Permissions::Auto {
+        // On every start, a resume's included: a resumed session starts in the mode its argv names, not the last one's.
+        args.extend(AUTO.iter().map(|flag| (*flag).to_owned()));
     }
     // Tool names are letters, digits, `_` and `-`, so the list Claude splits at commas holds exactly these.
     if !launch.tools.allowed.is_empty() {
@@ -252,6 +262,7 @@ impl ClaudeDriver {
         });
         let mut stream = Stream::new(lines, output, launch.resume.as_deref());
         stream.locked = launch.locked.then(|| launch.tools.allowed.clone());
+        stream.auto_unchecked = !launch.locked && launch.permissions == Permissions::Auto;
         let agent = Agent {
             child,
             process: process.clone(),
@@ -320,6 +331,8 @@ pub struct Stream {
     locked: Option<Vec<String>>,
     /// Claude offered a locked session another tool, so the agent must go and nothing more it says is passed on.
     refused: bool,
+    /// The session asked for auto mode and `init` has not yet said whether it got it.
+    auto_unchecked: bool,
     /// The cost Claude's last `result` gave, a running total, for a `result` that does not say its turn's own.
     cost_so_far: f64,
 }
@@ -441,7 +454,8 @@ impl Stream {
         let (waiting, servers, setup) = (Some(vec![]), None, None);
         let (locked, refused) = (None, false);
         let cost_so_far = 0.0;
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, cost_so_far }
+        let auto_unchecked = false;
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, auto_unchecked, cost_so_far }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -580,6 +594,16 @@ impl Stream {
                     }
                     self.started = true;
                     self.emit(Body::Started { provider_session: session.to_owned(), resumed: false });
+                }
+                // Claude starts in Manual, saying nothing else, when auto mode is not available to the login or the
+                // model (2.1.331): only `init` tells. A CLI that names no mode is not taken to have fallen back.
+                if self.auto_unchecked
+                    && let Some(mode) = line["permissionMode"].as_str()
+                {
+                    self.auto_unchecked = false;
+                    if mode != "auto" {
+                        self.emit(Body::Notice { text: NO_AUTO.into() });
+                    }
                 }
                 self.begin();
             }
@@ -879,6 +903,7 @@ mod tests {
             model: model.map(str::to_owned),
             login: None,
             effort: None,
+            permissions: Permissions::Ask,
             resume: resume.map(str::to_owned),
             tools_token: crate::driver::Secret::random(),
             tools: crate::tools::ToolsEndpoint::unattached(),
@@ -895,6 +920,62 @@ mod tests {
         let locked = tail(&launch(true, None, Some("s-1")));
         assert_eq!(locked[..LOCKED.len()], *LOCKED);
         assert_eq!(locked[LOCKED.len()..], ["--resume=s-1"], "a locked session gets no guard: it has no tool to commit with");
+    }
+
+    #[test]
+    fn auto_names_auto_mode_on_a_normal_start_and_on_its_resume_and_never_on_a_locked_session() {
+        let with = |locked: bool, resume: Option<&str>, permissions: Permissions| {
+            let mut launch = launch(locked, Some("sonnet"), resume);
+            launch.permissions = permissions;
+            args(&launch)[STREAM.len()..].to_vec()
+        };
+        let start = ["--permission-mode", "auto", "--model", "sonnet", "--append-system-prompt", GUARD];
+        assert_eq!(with(false, None, Permissions::Auto), start);
+        let resume = ["--permission-mode", "auto", "--model", "sonnet", "--resume=s-1", "--append-system-prompt", GUARD];
+        assert_eq!(with(false, Some("s-1"), Permissions::Auto), resume);
+        assert_eq!(with(false, Some("s-1"), Permissions::Ask), ["--model", "sonnet", "--resume=s-1", "--append-system-prompt", GUARD], "ask passes no mode");
+        for resume in [None, Some("s-1")] {
+            let locked = with(true, resume, Permissions::Auto);
+            assert_eq!(locked, with(true, resume, Permissions::Ask), "a locked session ignores it");
+            assert_eq!(locked[..LOCKED.len()], *LOCKED);
+            assert_eq!(locked.iter().filter(|arg| *arg == "--permission-mode").count(), 1, "its one mode is dontAsk: {locked:?}");
+            assert!(!locked.iter().any(|arg| arg == "auto"));
+        }
+    }
+
+    #[test]
+    fn a_session_that_asked_for_auto_is_told_once_when_init_says_claude_started_in_another_mode() {
+        let notices = |asked: bool, inits: &[Value]| {
+            let mut w = wire();
+            w.stream.auto_unchecked = asked;
+            w.stream.prompt("go".into());
+            for init in inits {
+                w.agent(init.clone());
+            }
+            w.said().into_iter().filter_map(|body| match body { Body::Notice { text } => Some(text), _ => None }).collect::<Vec<_>>()
+        };
+        let init = |mode: Option<&str>| {
+            let mut line = json!({"type": "system", "subtype": "init", "session_id": "s-1"});
+            if let Some(mode) = mode {
+                line["permissionMode"] = mode.into();
+            }
+            line
+        };
+        assert_eq!(notices(true, &[init(Some("default")), init(Some("default"))]), [NO_AUTO], "Manual, said once");
+        assert_eq!(notices(true, &[init(Some("auto")), init(Some("default"))]), Vec::<String>::new(), "it got auto; a later turn's init is not checked");
+        assert_eq!(notices(true, &[init(None)]), Vec::<String>::new(), "a CLI that names no mode");
+        assert_eq!(notices(false, &[init(Some("default"))]), Vec::<String>::new(), "a session that asked for nothing");
+    }
+
+    #[test]
+    fn permissions_go_by_the_words_ask_and_auto_and_the_store_keeps_only_auto() {
+        assert_eq!(serde_json::to_value(Permissions::Auto).unwrap(), "auto");
+        assert_eq!(serde_json::from_value::<Permissions>(json!("ask")).unwrap(), Permissions::Ask);
+        assert!(serde_json::from_value::<Permissions>(json!("bypassPermissions")).is_err(), "no other mode can be asked for");
+        assert_eq!((Permissions::Ask.stored(), Permissions::Auto.stored()), (None, Some("auto")));
+        for (stored, read) in [(None, Permissions::Ask), (Some("auto"), Permissions::Auto), (Some("plan"), Permissions::Ask)] {
+            assert_eq!(Permissions::from_stored(stored), read);
+        }
     }
 
     #[test]

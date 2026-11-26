@@ -872,7 +872,12 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
+  /** Who settles a Claude agent's permission prompts first; a backend that sent none has "auto". */
+  permissions?: AgentPermissions;
 }
+
+/** "auto": Claude Code's auto mode runs safe steps and blocks or asks the rest. "ask": you're asked about each step. */
+export type AgentPermissions = "auto" | "ask";
 
 /** Who git commits as in `~/Gossamr/agents`, and whether the person's git settings choose that by folder. */
 export interface WorkFolderGit {

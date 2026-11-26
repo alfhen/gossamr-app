@@ -87,6 +87,36 @@ pub fn random_hex(bytes: usize) -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Who settles a normal session's permission prompts first. Every prompt left over still comes to the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permissions {
+    /// The provider's own start, with no mode passed: each prompt comes to the client.
+    #[default]
+    Ask,
+    /// The provider's auto mode, where it has one: it runs what its checker takes as safe, blocks what it does not,
+    /// and asks the rest. Claude's is `--permission-mode auto`.
+    Auto,
+}
+
+impl Permissions {
+    /// As the store keeps it: none for `Ask`.
+    pub fn stored(self) -> Option<&'static str> {
+        match self {
+            Permissions::Ask => None,
+            Permissions::Auto => Some("auto"),
+        }
+    }
+
+    /// From the store: anything but `auto` is `Ask`, the start that passes nothing.
+    pub fn from_stored(stored: Option<&str>) -> Permissions {
+        match stored {
+            Some("auto") => Permissions::Auto,
+            _ => Permissions::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Launch {
     pub cwd: PathBuf,
@@ -95,6 +125,8 @@ pub struct Launch {
     /// The login folder as the client typed it; None is the provider's usual setup. `env` already runs as it.
     pub login: Option<String>,
     pub effort: Option<String>,
+    /// Who settles the agent's permission prompts first. A locked session's profile decides its own, so it ignores this.
+    pub permissions: Permissions,
     /// The provider's own session id, to resume it.
     pub resume: Option<String>,
     /// The session's tools token, for the `Authorization: Bearer` header. Every start and every resume gets a new one,

@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Body, Event, KEPT_FIELDS};
+use crate::driver::Permissions;
 use crate::process::Process;
 use crate::tools::ToolSpec;
 use crate::work::Work;
@@ -88,7 +89,9 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // before this step has none, and is never taken as gone or killed for it. And why the harness gave up on the
     // session's agent; a session given up on before this step was given up on by a shutdown.
     "ALTER TABLE sessions ADD COLUMN agent_boot TEXT;
-    ALTER TABLE sessions ADD COLUMN given_up_why TEXT;"];
+    ALTER TABLE sessions ADD COLUMN given_up_why TEXT;",
+    // Who settles a normal session's permission prompts first: `auto`, or none for the provider's own start.
+    "ALTER TABLE sessions ADD COLUMN permissions TEXT;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -134,6 +137,7 @@ pub struct SessionRow {
     pub handed_over: bool,
     pub login: Option<String>,
     pub effort: Option<String>,
+    pub permissions: Permissions,
     pub work: Option<Work>,
     /// None for a session made before the store kept it.
     pub endpoint: Option<String>,
@@ -154,6 +158,7 @@ pub struct NewSession<'a> {
     pub model: Option<&'a str>,
     pub login: Option<&'a str>,
     pub effort: Option<&'a str>,
+    pub permissions: Permissions,
     pub work: Option<&'a Work>,
     pub endpoint: Option<&'a str>,
     pub tools: &'a [ToolSpec],
@@ -183,6 +188,9 @@ pub struct Listed {
     pub login: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Who settles its permission prompts first, as it was opened.
+    #[serde(default)]
+    pub permissions: Permissions,
     /// The question the agent asked through `ask` that is still open: its id.
     #[serde(default)]
     pub open_question: Option<String>,
@@ -254,14 +262,14 @@ impl Store {
     }
 
     pub fn create_session(&self, id: &str, provider: &str, locked: bool, cwd: &Path, model: Option<&str>) -> Result<()> {
-        self.insert_session(id, &NewSession { provider, locked, cwd, model, login: None, effort: None, work: None, endpoint: None, tools: &[], result_schema: None })
+        self.insert_session(id, &NewSession { provider, locked, cwd, model, login: None, effort: None, permissions: Permissions::Ask, work: None, endpoint: None, tools: &[], result_schema: None })
     }
 
     pub fn insert_session(&self, id: &str, new: &NewSession) -> Result<()> {
         let work = new.work;
         self.conn.execute(
-            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms, login, effort, repo, base, branch, clone, endpoint, tools, result_schema)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms, login, effort, repo, base, branch, clone, endpoint, tools, result_schema, permissions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             // The folders' bytes, as they are: a path need not be UTF-8.
             params![
                 id,
@@ -278,7 +286,8 @@ impl Store {
                 work.map(|w| w.clone.as_os_str().as_bytes()),
                 new.endpoint,
                 serde_json::to_string(new.tools)?,
-                new.result_schema.map(serde_json::Value::to_string)
+                new.result_schema.map(serde_json::Value::to_string),
+                new.permissions.stored()
             ],
         )?;
         Ok(())
@@ -288,7 +297,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
-                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up, given_up_why FROM sessions WHERE id = ?1",
+                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up, given_up_why, permissions FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -313,6 +322,7 @@ impl Store {
                         result_schema: json_column(row, 17)?,
                         no_carry_on: row.get(18)?,
                         given_up: given_up(row.get(19)?, row.get(20)?),
+                        permissions: Permissions::from_stored(row.get::<_, Option<String>>(21)?.as_deref()),
                     })
                 },
             )
@@ -520,7 +530,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
                 (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1), cwd,
-                given_up, given_up_why
+                given_up, given_up_why, permissions
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -528,7 +538,8 @@ impl Store {
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
             let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
             let (cwd, given_up) = (PathBuf::from(OsString::from_vec(row.get(13)?)), given_up(row.get(14)?, row.get(15)?));
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question, held: None, given_up, cwd })
+            let permissions = Permissions::from_stored(row.get::<_, Option<String>>(16)?.as_deref());
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, permissions, open_question, held: None, given_up, cwd })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

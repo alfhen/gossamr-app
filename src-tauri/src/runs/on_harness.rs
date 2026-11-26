@@ -14,6 +14,7 @@ use super::message::Delivery;
 use super::service::RunService;
 use crate::domain::{render_prompt_from, Run, RunEvent, RunState, Start};
 use crate::error::{Error, Result};
+use crate::model_choice::AgentPermissions;
 
 /// The link to the harness, and the provider runs open on: `claude`, or the mock a debug build was started with.
 pub struct OnHarness {
@@ -126,8 +127,9 @@ pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Noth
 
 /// The mock works in the clone as it is; every other provider in a new worktree on the run's branch, on the login
 /// folder of the run's instance as the person typed it (`None`: their usual setup). Effort is the provider's own, since
-/// no agent chooses one yet.
-pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<String>) -> Op {
+/// no agent chooses one yet. `permissions` is the Settings choice when the run starts; the harness keeps it for every
+/// resume of the session.
+pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<String>, permissions: AgentPermissions) -> Op {
     let spec = &run.spec;
     let mock = provider == MOCK;
     Op::Open {
@@ -140,6 +142,7 @@ pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<S
         model,
         login: login.filter(|_| !mock),
         effort: None,
+        permissions,
         ends_with_client: false,
         tools: crate::agent::agent_tools::client_tools(),
         result_schema: Some(super::report::result_schema()),
@@ -190,7 +193,7 @@ impl RunService {
         }
         let config = crate::config::AppConfig::load(&self.core.data_dir());
         let login = config.providers.iter().find(|p| p.id == run.instance_id()).and_then(|p| p.config.config_dir.clone());
-        let opened = on.link.open(&run.id, open_op(run, &on.provider, model, login)).await;
+        let opened = on.link.open(&run.id, open_op(run, &on.provider, model, login, self.settings().permissions)).await;
         // The link may have bound the session, and applied its first events, before a later step failed.
         *run = self.load(&run.id).await?;
         let session = match opened {

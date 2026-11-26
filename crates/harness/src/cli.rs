@@ -159,7 +159,7 @@ async fn next_event(client: &mut Client) -> Result<Option<crate::event::Event>> 
 
 async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool) -> Result<bool> {
     let cwd = std::env::current_dir()?;
-    let open = Op::Open { provider, cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client, tools: vec![], result_schema: None };
+    let open = Op::Open { provider, cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client, tools: vec![], result_schema: None };
     let opened = client.call(open).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
