@@ -100,6 +100,13 @@ describe("the review's examples", () => {
     expect(lines("a\n\nb").map(flat)).toEqual(["a", "", "b"]);
   });
 
+  it("counts a line as blank only when it is empty or spaces and tabs, so lines of other whitespace are shown and marked", () => {
+    expect(lines("a\n \t\n\t\n  \nb").map(flat)).toEqual(["a", "⟨3 blank lines⟩", "b"]);
+    expect(lines("a\n\r\n\uFEFF\n\u2028\nb").map(flat)).toEqual(["a", "⟨CR⟩", "⟨U+FEFF⟩", "⟨U+2028⟩", "b"]);
+    expect(lines("\u00a0\n\u3000\n\u00a0").map(flat)).toEqual(["\u00a0", "\u3000", "\u00a0"]);
+    expect(flat(segments("a\u2800b"))).toBe("a⟨U+2800⟩b");
+  });
+
   it("marks typed brackets, so text can't pass for a placeholder, and names each placeholder for a screen reader", () => {
     const html = renderToStaticMarkup(<RequestInput kind="tool" input={{ "description⟩": "⟨ESC⟩ \u001b" }} />);
     expect(shown(html)).toContain("description⟨U+27E9⟩");

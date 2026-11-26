@@ -127,6 +127,41 @@ test("a second click 250 ms later at the same spot answers nothing more, though 
   expect((await mockPermissionAnswers(page)).map((a) => a.request)).toEqual(["perm-12"]);
 });
 
+/** Clicks the middle of `box`, as a pointer that stays where it is. */
+const clickAt = (page: Page, box: { x: number; y: number; width: number; height: number }) => page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+test("a double click on one run's Allow answers only that run, though the next card's Allow moves under the pointer", async ({ page }) => {
+  const a = requestsOn(page, "CA-406");
+  const b = requestsOn(page, "WEB-107");
+  await a.getByRole("button", { name: "Allow" }).scrollIntoViewIfNeeded();
+  await expect(a.getByRole("button", { name: "Allow" })).toBeEnabled();
+  const at = (await a.getByRole("button", { name: "Allow" }).boundingBox())!;
+  await page.mouse.dblclick(at.x + at.width / 2, at.y + at.height / 2);
+  await expect(a).toHaveCount(0);
+  // The heights that make this a probe: the other run's Allow is now where the pointer is.
+  const under = (await b.getByRole("button", { name: "Allow" }).boundingBox())!;
+  expect(at.y + at.height / 2).toBeGreaterThanOrEqual(under.y);
+  expect(at.y + at.height / 2).toBeLessThanOrEqual(under.y + under.height);
+  await page.waitForTimeout(800);
+  expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-15"]);
+  await expect(b).toContainText("git push --force origin main");
+});
+
+for (const gap of [150, 300, 450]) {
+  test(`two clicks ${gap} ms apart on one run's Allow answer only that run, though the next card moved under the pointer`, async ({ page }) => {
+    const allow = requestsOn(page, "CA-406").getByRole("button", { name: "Allow" });
+    await allow.scrollIntoViewIfNeeded();
+    await expect(allow).toBeEnabled();
+    const at = (await allow.boundingBox())!;
+    await clickAt(page, at);
+    await page.waitForTimeout(gap);
+    await clickAt(page, at);
+    await page.waitForTimeout(800);
+    expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-15"]);
+    await expect(requestsOn(page, "WEB-107")).toContainText("git push --force origin main");
+  });
+}
+
 test("what follows a run of blank lines, and a field after a long value, are in sight above Allow with nothing scrolling them away", async ({ page }) => {
   const ask = requestsOn(page, "WEB-106");
   await expect(field(ask, "command")).toContainText("⟨30 blank lines⟩");

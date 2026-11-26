@@ -77,6 +77,12 @@ interface RunsState {
   permissionAnswered: ReadonlySet<string>;
   /** Why the last answer to a permission request was refused, by `answeringKey`, until the next answer to it. */
   permissionRefused: ReadonlyMap<string, string>;
+  /**
+   * Counts every change to the open permission requests anywhere on the page: one answered here, and one that a read
+   * finds added, answered or withdrawn. Every item holds its buttons for a moment after it moves, since a change in one
+   * run's card moves the cards below it.
+   */
+  permissionEpoch: number;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -158,6 +164,9 @@ const liveOrder = (s: Pick<RunsState, "runs" | "filters">) => agentGroups(s.runs
 /** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
 const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
 
+/** Every open permission request on the page, in order, to tell when one was added, answered or withdrawn. */
+const openRequestIds = (runs: readonly Run[]) => runs.flatMap((run) => (run.permissions ?? []).map((p) => answeringKey(run.id, p.id))).join("\n");
+
 function forgetRecovered(dismissed: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
   const recovered = runs.filter((r) => !DISMISSABLE.includes(r.state) && dismissed.has(r.id));
   if (!recovered.length) return dismissed;
@@ -225,6 +234,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   permissionAnswering: new Map(),
   permissionAnswered: new Set<string>(),
   permissionRefused: new Map(),
+  permissionEpoch: 0,
   answered: {},
   ...idle,
 
@@ -257,7 +267,8 @@ export const useRuns = create<RunsState>((set, get) => ({
       clearTimeout(watchdog);
       if (mine === seq) {
         const runs = all.filter((r) => !r.archivedAt);
-        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
+        const moved = openRequestIds(runs) !== openRequestIds(get().runs);
+        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs), ...(moved ? { permissionEpoch: get().permissionEpoch + 1 } : {}) });
         forgetSettledAnswers(runs);
         announceFailedLaunches(get, set);
       }
@@ -367,7 +378,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       await backend.runsAnswerPermission(id, request, decision);
       // Request ids are the harness's and never come back, so the key stays: the item is gone by the next read.
-      set({ permissionAnswered: new Set([...get().permissionAnswered, key]) });
+      set({ permissionAnswered: new Set([...get().permissionAnswered, key]), permissionEpoch: get().permissionEpoch + 1 });
       return true;
     } catch (e) {
       // The item keeps the reason until the next answer: a toast alone goes away.

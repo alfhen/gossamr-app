@@ -11,6 +11,7 @@ import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, runA
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 
+const settle = () => new Promise((r) => setTimeout(r, 0));
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const seeded = () => new MockBackend({ runs: { seed: "permissions", epoch: NOW } });
 const byKey = (backend: MockBackend, key: string) => backend.runs.list().find((r) => r.item?.key === key && r.harnessSession)!;
@@ -96,12 +97,16 @@ describe("a permission request's item", () => {
     const last = html.indexOf('migrating batch 3000');
     expect(last).toBeGreaterThan(0);
     expect(html.indexOf(">Allow<")).toBeGreaterThan(last);
-    expect(html.indexOf(">Deny<")).toBeGreaterThan(last);
+    expect(html.lastIndexOf(">Deny<")).toBeGreaterThan(last);
+    // A Deny before it too, safe to give unseen, with where Allow is.
+    expect(html.indexOf(">Deny<")).toBeLessThan(html.indexOf("migrating batch 1"));
+    expect(unescape(html)).toContain("This request is 3,001 lines long. Allow is at its end.");
+    expect(html.match(/>Allow</g)).toHaveLength(1);
     expect(html).not.toMatch(/sticky|fixed|max-h-/);
   });
 
   it("holds both buttons while held: answered, or just moved into place", () => {
-    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} held onAnswer={vi.fn()} />);
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} held="Wait a moment: the list just changed." onAnswer={vi.fn()} />);
     const answers = buttons(html).filter((b) => b.text === "Allow" || b.text === "Deny");
     expect(answers.map((b) => b.text)).toEqual(["Allow", "Deny"]);
     for (const b of answers) expect(b.tag).toContain("disabled");
@@ -231,6 +236,23 @@ describe("the runs store's permission answer", () => {
     expect(await useRuns.getState().answerPermission(run.id, "perm-2", "allow")).toBe(false);
     expect(answer).toHaveBeenCalledTimes(1);
     expect(backend.runs.permissionAnswers.map((a) => a.request)).toEqual(["perm-2"]);
+  });
+
+  it("counts every change to the open requests on the page, which every item's hold is keyed on, and nothing else", async () => {
+    const backend = seeded();
+    useRuns.getState().init(backend);
+    await settle();
+    const epoch = () => useRuns.getState().permissionEpoch;
+    const start = epoch();
+    await useRuns.getState().reload();
+    expect(epoch(), "a read that finds the same requests").toBe(start);
+    await useRuns.getState().answerPermission(byKey(backend, "CA-406").id, "perm-15", "allow");
+    await settle();
+    const answered = epoch();
+    expect(answered, "an answer here, and the read after it").toBeGreaterThan(start);
+    backend.runs.withdrawPermission(byKey(backend, "WEB-100").id, "perm-2");
+    await useRuns.getState().reload();
+    expect(epoch(), "a request withdrawn in another run").toBeGreaterThan(answered);
   });
 
   it("says why an answer was refused", async () => {

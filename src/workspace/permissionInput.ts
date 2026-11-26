@@ -14,7 +14,7 @@ const NAMES: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x
  * unassigned code points, and every character Unicode says to draw as nothing (zero-width spaces, U+034F, Hangul fillers,
  * variation selectors, tag characters). The placeholder's own brackets are marked too, so typed text can't pass for one.
  */
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u27e8\u27e9]/u;
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\u27e8\u27e9]/u;
 
 /** Whether a terminal would hide `code`, or it could pass for a placeholder. A tab and a line break stay as they are. */
 export function hides(code: number): boolean {
@@ -52,7 +52,8 @@ export function lines(text: string): Seg[][] {
   const all = text.split("\n");
   for (let i = 0; i < all.length; ) {
     let end = i;
-    while (end < all.length && !all[end].trim()) end++;
+    // Blank is empty or spaces and tabs: a line of anything else, even what trim() drops, is shown and marked.
+    while (end < all.length && /^[ \t]*$/.test(all[end])) end++;
     if (end - i >= BLANK_RUN) {
       out.push([{ hidden: `⟨${end - i} blank lines⟩`, label: `${end - i} blank lines` }]);
       i = end;
@@ -118,4 +119,9 @@ export function inputFields(kind: PermissionKind, input: unknown): InputField[] 
     }
   }
   return [...out, ...Object.entries(value).filter(([key]) => !done.has(key)).map(([key, v]) => text(key, v))];
+}
+
+/** How many lines a request's input takes on screen, its field names included. */
+export function inputLineCount(kind: PermissionKind, input: unknown): number {
+  return inputFields(kind, input).reduce((sum, field) => sum + 1 + (field.type === "text" ? field.lines.length : field.removed.length + field.added.length), 0);
 }

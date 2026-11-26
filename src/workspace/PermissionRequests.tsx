@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { movedWithin, repeatOnOther, trackMoves } from "./buttonMoves";
+import { inputLineCount } from "./permissionInput";
 import { Button } from "../components/Button";
 import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
@@ -27,7 +29,9 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
   const answered = useRuns((s) => s.permissionAnswered.has(key));
   const pending = useRuns((s) => runAnswerPending(run.id, openPermissions(run), s.permissionAnswering, s.permissionAnswered));
   const refused = useRuns((s) => s.permissionRefused.get(key) ?? null);
-  const settled = useSettled(`${run.id}\u0000${openPermissions(run).map((p) => p.id).join(",")}`);
+  // Any change to a request anywhere on the page moves what is below it, so every item waits after one.
+  const epoch = useRuns((s) => s.permissionEpoch);
+  const settled = useSettled(`${epoch}\u0000${run.id}\u0000${openPermissions(run).map((p) => p.id).join(",")}`);
   const regain = useRef<(() => void) | null>(null);
   // An item answered from the keyboard leaves; the keyboard goes to the list it was in, never to the next item's button.
   useEffect(() => () => void (regain.current && setTimeout(regain.current, 0)), []);
@@ -49,7 +53,8 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
         if (keyboard) setTimeout(() => (document.activeElement === document.body || !document.activeElement) && from.focus({ preventScroll: true }), 0);
       });
   };
-  return <PermissionItemView name={name} request={request} answering={answering ?? null} held={answered || pending || !settled} refused={refused} size={size} onAnswer={onAnswer} />;
+  const held = answered || pending ? "Wait a moment: an answer is on its way." : settled ? null : "Wait a moment: the list just changed.";
+  return <PermissionItemView name={name} request={request} answering={answering ?? null} held={held} refused={refused} size={size} onAnswer={onAnswer} />;
 }
 
 /**
@@ -60,8 +65,8 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
 export const SETTLE_MS = 500;
 
 /**
- * False for `SETTLE_MS` after `key` changes. When an answered request leaves, the next one moves up under the pointer;
- * its buttons wake only after the second click of a double-click would have landed.
+ * False for `SETTLE_MS` after `key` changes. When an answered request leaves, what was below it moves up under the
+ * pointer; its buttons wake only after the second click of a double-click would have landed.
  */
 function useSettled(key: string) {
   const [settled, setSettled] = useState<string | null>(null);
@@ -72,14 +77,72 @@ function useSettled(key: string) {
   return settled === key;
 }
 
-export function PermissionItemView({ name, request, answering, held = false, refused = null, size = "md", onAnswer }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: boolean; refused?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement): void }) {
+/**
+ * An answer button that takes only a click aimed at it: not the second click of a double-click, not a click on a button
+ * that moved on screen within `SETTLE_MS`, and not a click at the spot of one a moment before that landed on something
+ * else. A key press acts on the focused button wherever it sits.
+ */
+function AnswerButton({ size, off, title, onAnswer, children }: { size: Size; off: boolean; title?: string; onAnswer(from: HTMLElement): void; children: ReactNode }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [moved, setMoved] = useState(0);
+  // A move holds the button where you can see it, as a change to the list does.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = trackMoves(el, () => {
+      setMoved((n) => n + 1);
+      clearTimeout(timer);
+      timer = setTimeout(() => setMoved(0), SETTLE_MS);
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+    };
+  }, []);
+  const held = off || moved > 0;
+  return (
+    <Button
+      ref={ref}
+      size={size}
+      disabled={held}
+      title={off ? title : moved > 0 ? "Wait a moment: the list just changed." : undefined}
+      onClick={(ev) => {
+        const el = ev.currentTarget;
+        if (ev.detail > 1 || (ev.detail === 1 && (movedWithin(el, SETTLE_MS) || repeatOnOther(el, REPEAT_MS)))) return;
+        onAnswer(el);
+      }}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** How long after a click a second one at the same spot, on what moved under it, is ignored. */
+export const REPEAT_MS = 1000;
+
+/** Lines from which an item also offers Deny at its top and says where Allow is. */
+export const LONG_REQUEST_LINES = 40;
+
+export function PermissionItemView({ name, request, answering, held = null, refused = null, size = "md", onAnswer }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; refused?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement): void }) {
   const why = denyOnlyWhy(request);
-  const off = !!answering || held;
+  const off = !!answering || !!held;
+  const title = held ?? undefined;
+  const length = request.input != null ? inputLineCount(request.kind, request.input) : 0;
   return (
     <div data-permission-request={request.id} className="grid gap-2">
       <p className="m-0 font-semibold text-ws-ink">
         {name} wants to {permissionWants(request)}
       </p>
+      {/* Denying unseen is safe, so a long request offers Deny before it too; Allow stays after all of it. */}
+      {length > LONG_REQUEST_LINES && (
+        <div data-permission-top className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
+          <p className="m-0 text-sm text-ws-ink2">{`This request is ${length.toLocaleString("en")} lines long. Allow is at its end.`}</p>
+          <AnswerButton size={size} off={off} title={title} onAnswer={(el) => onAnswer("deny", el)}>
+            Deny
+          </AnswerButton>
+        </div>
+      )}
       {request.tool && (
         <p className="m-0 text-sm text-ws-ink2">
           With <code className="font-mono">{request.tool}</code>:
@@ -99,13 +162,13 @@ export function PermissionItemView({ name, request, answering, held = false, ref
       <div data-permission-answers onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         <ButtonGroup label="Answer the permission request">
           {canAllow(request) && (
-            <Button size={size} disabled={off} onClick={(ev) => onAnswer("allow", ev.currentTarget)}>
+            <AnswerButton size={size} off={off} title={title} onAnswer={(el) => onAnswer("allow", el)}>
               {answering === "allow" ? "Allowing…" : "Allow"}
-            </Button>
+            </AnswerButton>
           )}
-          <Button size={size} disabled={off} onClick={(ev) => onAnswer("deny", ev.currentTarget)}>
+          <AnswerButton size={size} off={off} title={title} onAnswer={(el) => onAnswer("deny", el)}>
             {answering === "deny" ? "Denying…" : "Deny"}
-          </Button>
+          </AnswerButton>
         </ButtonGroup>
       </div>
     </div>
