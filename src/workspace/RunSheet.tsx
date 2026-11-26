@@ -302,7 +302,9 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
-  const attention = openPermissions(run).length > 0 || ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);
+  // A request that closed under the pointer keeps its place until the pointer leaves, so the sheet below doesn't move up.
+  const closing = useClosingIn(run, "sheet");
+  const attention = openPermissions(run).length > 0 || closing || ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);
   const live = run.state === "working" ? progressText(run) : null;
   return (
     <SheetFrame

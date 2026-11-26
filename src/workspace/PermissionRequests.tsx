@@ -88,8 +88,21 @@ function afterAnswer(from: HTMLElement): () => void {
   };
 }
 
-/** The share of a band that must be in view for it to count as seen: all of it, short of rounding, so no line of it is left below the edge. */
-const SEEN_SHARE = 0.99;
+/** How far short of its whole height and width a band may be, in px, and still count as all in view: rounding, not a line. */
+const WHOLE_SLACK = 1;
+
+type Box = { left: number; top: number; width: number; height: number };
+
+/** The part of a band's box inside a window of `width` by `height` when that is all of it, short of `WHOLE_SLACK`; else null. */
+export function wholeIn(band: Box, width: number, height: number): Box | null {
+  const left = Math.max(band.left, 0);
+  const top = Math.max(band.top, 0);
+  const seen = { left, top, width: Math.max(0, Math.min(band.left + band.width, width) - left), height: Math.max(0, Math.min(band.top + band.height, height) - top) };
+  return seen.height >= band.height - WHOLE_SLACK && seen.width >= band.width - WHOLE_SLACK ? seen : null;
+}
+
+/** Whether all of a band is in the window now, measured at the moment of the check. */
+const wholeInWindow = (part: Element) => wholeIn(part.getBoundingClientRect(), window.innerWidth, window.innerHeight);
 
 /** How tall each band is: half the window, so all of one fits on screen at once, below a header. */
 const bandStep = () => Math.max(80, Math.floor(window.innerHeight / 2));
@@ -146,7 +159,7 @@ export function bandOnTop(entry: Pick<IntersectionObserverEntry, "intersectionRe
 
 /**
  * Reads how much of the request has been on screen since the item appeared. The request is laid in bands by height (see
- * `bandStep`), drawn over it as `[data-seen-part]`; each counts once all of it has been in view with the request on top
+ * `bandStep`), drawn over it as `[data-seen-part]`; each counts once all of it has been in view at once with the request on top
  * there. A request that fits on screen is seen at once; a long one, even one long line, only once scrolled through, not
  * by a jump to its end. `tall`: the item is taller than the window, so it says why Allow is off and offers Deny at its top.
  */
@@ -182,9 +195,16 @@ function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall:
     // Laid out again, the bands are new: what was read counts again only once read again.
     setSeen(false);
     const left = new Set(parts);
-    const inView = new Set<Element>();
+    // The observer only says which bands are near the window and when to look; whether one is all in view, with the
+    // request on top across it, is measured when it is checked, so a scroll before the observer catches up can't count a
+    // sliver of a band.
+    const near = new Set<Element>();
     const tick = () => {
-      for (const part of inView) if (left.has(part) && bandOnTop({ intersectionRect: inWindow(part) }, item, (x, y) => document.elementFromPoint(x, y))) left.delete(part);
+      for (const part of near) {
+        if (!left.has(part)) continue;
+        const whole = wholeInWindow(part);
+        if (whole && bandOnTop({ intersectionRect: whole as DOMRect }, item, (x, y) => document.elementFromPoint(x, y))) left.delete(part);
+      }
       if (left.size) return;
       watch.disconnect();
       setSeen(true);
@@ -192,12 +212,12 @@ function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall:
     const watch = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.intersectionRatio >= SEEN_SHARE) inView.add(entry.target);
-          else inView.delete(entry.target);
+          if (entry.isIntersecting) near.add(entry.target);
+          else near.delete(entry.target);
         }
         tick();
       },
-      { threshold: [0, 0.5, SEEN_SHARE, 1] },
+      { threshold: [0, 0.5, 0.99, 1] },
     );
     parts.forEach((part) => watch.observe(part));
     // What covered a band may go without the band moving: look again when anything scrolls.
@@ -208,14 +228,6 @@ function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall:
     };
   }, [root, area, step, measured]);
   return { seen, tall: !!size && size.item > window.innerHeight, bands: { area, step } };
-}
-
-/** The part of `el` inside the window. */
-function inWindow(el: Element): DOMRect {
-  const r = el.getBoundingClientRect();
-  const left = Math.max(r.left, 0);
-  const top = Math.max(r.top, 0);
-  return new DOMRect(left, top, Math.max(0, Math.min(r.right, window.innerWidth) - left), Math.max(0, Math.min(r.bottom, window.innerHeight) - top));
 }
 
 /** The request's height and the band height, both 0 before they are measured (one band covers it then). */
@@ -312,7 +324,9 @@ export function PermissionItemView({ name, ordinal = null, request, answering, h
       {tall && (
         <div data-permission-top className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
           {/* Said whether or not it has been read, so nothing below moves once it has. */}
-          <p className="m-0 text-sm text-ws-ink2">This request is taller than your screen. Scroll through it to allow it: Allow is at its end.</p>
+          <p className="m-0 text-sm text-ws-ink2">
+            {canAllow(request) ? "This request is taller than your screen. Scroll through it to allow it: Allow is at its end." : "This request is taller than your screen. It can only be denied, here or at its end."}
+          </p>
           <AnswerButton size={size} off={off} title={title} onAnswer={(el, byKey) => onAnswer("deny", el, byKey)}>
             Deny
           </AnswerButton>

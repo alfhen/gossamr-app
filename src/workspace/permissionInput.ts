@@ -1,10 +1,11 @@
 import type { PermissionKind } from "../types";
 
 /** A run of plain text, or what a terminal would hide, shown as a marked placeholder with a name a screen reader says. */
-export type Seg = { text: string } | { hidden: string; label: string };
+/** `lossy`: the placeholder stands for more than it shows, as a count of combining marks does for which marks they are. */
+export type Seg = { text: string } | { hidden: string; label: string; lossy?: true };
 
 /** A field of a request's input, by its own name: plain text as lines, or a change as the lines it removes and adds. */
-export type InputField = { name: Seg[]; type: "text"; lines: Seg[][]; valueType?: string } | { name: Seg[]; type: "change"; removed: Seg[][]; added: Seg[][] };
+export type InputField = { name: Seg[]; type: "text"; lines: Seg[][]; valueType?: string } | { name: Seg[]; type: "change"; removed: Seg[][]; added: Seg[][]; valueType?: string };
 
 const NAMES: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
 
@@ -51,7 +52,7 @@ export function segments(text: string): Seg[] {
     let end = i;
     while (end < chars.length && MARK.test(chars[end]) && !hides(chars[end].codePointAt(0)!)) end++;
     if (end - i > MARKS_SHOWN) {
-      mark({ hidden: `⟨${end - i} combining marks⟩`, label: `${end - i} combining marks` });
+      mark({ hidden: `⟨${end - i} combining marks⟩`, label: `${end - i} combining marks`, lossy: true });
       i = end;
     } else if (end > i) {
       plain += chars.slice(i, end).join("");
@@ -91,7 +92,9 @@ const asText = (value: unknown): string => (typeof value === "string" ? value : 
 /** The type of a value that isn't text, named beside its field, so `false` the value and "false" the text read apart. */
 const typeOf = (value: unknown): string | undefined => (typeof value === "string" ? undefined : value === null ? "null" : Array.isArray(value) ? "list" : typeof value);
 const text = (name: string, value: unknown): InputField => ({ name: segments(name), type: "text", lines: lines(asText(value)), ...(typeOf(value) ? { valueType: typeOf(value) } : {}) });
-const change = (name: string, removed: unknown, added: unknown): InputField => ({ name: segments(name), type: "change", removed: removed == null || removed === "" ? [] : lines(asText(removed)), added: added == null || added === "" ? [] : lines(asText(added)) });
+/** The types of a change's sides that aren't text, so a content of `false` reads apart from one of "false". */
+const typesOf = (...values: unknown[]) => [...new Set(values.filter((v) => v != null && v !== "").map(typeOf).filter((t): t is string => !!t))].join(", ") || undefined;
+const change = (name: string, removed: unknown, added: unknown): InputField => ({ name: segments(name), type: "change", removed: removed == null || removed === "" ? [] : lines(asText(removed)), added: added == null || added === "" ? [] : lines(asText(added)), ...(typesOf(removed, added) ? { valueType: typesOf(removed, added) } : {}) });
 
 /** The fields a kind puts first, in the order a person reads them. */
 const FIRST: Partial<Record<PermissionKind, readonly string[]>> = {
@@ -143,4 +146,28 @@ export function inputFields(kind: PermissionKind, input: unknown): InputField[] 
     }
   }
   return [...out, ...Object.entries(value).filter(([key]) => !done.has(key)).map(([key, v]) => text(key, v))];
+}
+
+/**
+ * Why an input can't be shown exactly as an Allow would pass it, or null when it can: a stack of combining marks is shown
+ * as a count, not as which marks; an integer past 2^53 arrives rounded, so the page would show another number than the
+ * agent runs. Keys and values, at any depth.
+ */
+export function inexactIn(value: unknown): "marks" | "number" | null {
+  if (typeof value === "string") return segments(value).some((seg) => "lossy" in seg) ? "marks" : null;
+  if (typeof value === "number") return Number.isInteger(value) && !Number.isSafeInteger(value) ? "number" : null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const why = inexactIn(item);
+      if (why) return why;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      const why = inexactIn(key) ?? inexactIn(item);
+      if (why) return why;
+    }
+  }
+  return null;
 }

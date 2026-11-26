@@ -1,5 +1,5 @@
 import type { PermissionRequest, Run } from "../types";
-import { segments, type Seg } from "./permissionInput";
+import { inexactIn, segments, type Seg } from "./permissionInput";
 
 /** What the agent wants, after "wants to", by the kind of request. */
 const WANTS: Record<PermissionRequest["kind"], string> = {
@@ -16,16 +16,22 @@ export const permissionWants = (request: Pick<PermissionRequest, "kind">) => WAN
 export const PERMISSIONS_WARNING = "Allowing this gives the agent more access than it started with.";
 
 /**
- * Whether Allow may be offered: only where every field of the input is on screen, so never for a request that is masked,
- * cut (its input is text), rebuilt with no input, or that the app marks deny-only.
+ * Whether Allow may be offered: only where every field of the input is on screen exactly as an Allow passes it, so never
+ * for a request that is masked, cut (its input is text), rebuilt with no input, shown only in part (`inexactIn`), or that
+ * the app marks deny-only.
  */
-export const canAllow = (request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">) => !request.denyOnly && !request.masked && request.input != null && typeof request.input === "object" && !Array.isArray(request.input);
+export const canAllow = (request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">) =>
+  !request.denyOnly && !request.masked && request.input != null && typeof request.input === "object" && !Array.isArray(request.input) && !inexactIn(request.input);
 
 /** Why a request has no Allow, or null when it has one: the app's own refusal of an Allow, in runs/on_harness.rs. */
 export function denyOnlyWhy(request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">): string | null {
   if (canAllow(request)) return null;
   if (request.masked) return "Part of this is hidden; run it yourself in Terminal if you trust it.";
   if (typeof request.input === "string") return "This request was too large to show whole, so it can only be denied.";
+  // An integer past 2^53 the app refuses too (`ONLY_DENY_INEXACT`); a stack of combining marks only the page can't show.
+  const inexact = request.input != null && typeof request.input === "object" ? inexactIn(request.input) : null;
+  if (inexact === "number") return "Gossamr can't show this request exactly, so it can only be denied.";
+  if (inexact === "marks") return "Part of this is a stack of marks Gossamr shows only as a count, so it can only be denied.";
   return "Gossamr can't show all of this request, so it can only be denied.";
 }
 

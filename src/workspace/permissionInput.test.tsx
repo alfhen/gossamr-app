@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { RequestInput } from "./RequestInput";
-import { hides, inputFields, lines, placeholder, segments, type InputField, type Seg } from "./permissionInput";
+import { hides, inexactIn, inputFields, lines, placeholder, segments, type InputField, type Seg } from "./permissionInput";
 
 const flat = (segs: Seg[]) => segs.map((s) => ("text" in s ? s.text : s.hidden)).join("");
 const names = (fields: InputField[]) => fields.map((f) => flat(f.name));
@@ -118,6 +118,20 @@ describe("the review's examples", () => {
   });
 });
 
+describe("numbers past what the page can hold exactly", () => {
+  it("make the input inexact, at any depth, while safe integers and other numbers don't", () => {
+    expect(inexactIn({ id: 2 ** 53 })).toBe("number");
+    expect(inexactIn({ ids: [1, 2, -(2 ** 60)] })).toBe("number");
+    expect(inexactIn({ id: Number.MAX_SAFE_INTEGER, ratio: 0.5, big: 1e3 })).toBeNull();
+  });
+});
+
+describe("a request with no fields", () => {
+  it("says so in a box that can be read", () => {
+    expect(shown(renderToStaticMarkup(<RequestInput kind="tool" input={{}} />))).toContain("This request has no input.");
+  });
+});
+
 describe("what the fields say about themselves", () => {
   it("names the type of a value that isn't text, so false and \"false\" read apart", () => {
     const fields = inputFields("tool", { flag: false, word: "false", count: 3, gone: null, items: [] });
@@ -131,6 +145,16 @@ describe("what the fields say about themselves", () => {
     const html = renderToStaticMarkup(<RequestInput kind="tool" input={{ flag: false, word: "false" }} />);
     expect(shown(html)).toContain("flag (boolean)");
     expect(shown(html)).not.toContain("word (");
+  });
+
+  it("names the type of a file's content or an edit's text that isn't text, so false and \"false\" read apart there too", () => {
+    const [, written] = inputFields("file_change", { file_path: "a", content: false });
+    expect(written.type === "change" && written.valueType).toBe("boolean");
+    const [, edited] = inputFields("file_change", { file_path: "a", old_string: "x", new_string: 0 });
+    expect(edited.type === "change" && edited.valueType).toBe("number");
+    const [, text] = inputFields("file_change", { file_path: "a", content: "false" });
+    expect(text.type === "change" && text.valueType).toBeUndefined();
+    expect(shown(renderToStaticMarkup(<RequestInput kind="file_change" input={{ file_path: "a", content: false }} />))).toContain("content (boolean)");
   });
 
   it("shows an empty list of edits as a field, not nothing", () => {
@@ -170,7 +194,16 @@ describe("combining marks", () => {
     expect(shown(html)).toContain("x⟨60 combining marks⟩");
     expect(html).toContain(">pnpm test<");
     expect(html).toContain(">echo done<");
-    for (const line of html.match(/<div data-line[^>]*>/g) ?? []) expect(line).toContain("overflow-hidden");
+    const lines = html.match(/<div data-line[^>]*>/g) ?? [];
+    expect(lines).toHaveLength(3);
+    for (const line of lines) expect(line).toContain("overflow-hidden");
+  });
+
+  it("make the input inexact, since the count doesn't say which marks they are", () => {
+    expect(inexactIn({ command: `x${marks(3)}` })).toBe("marks");
+    expect(inexactIn({ [`k${marks(3)}`]: "v" })).toBe("marks");
+    expect(inexactIn({ nested: [{ deep: `x${marks(4)}` }] })).toBe("marks");
+    expect(inexactIn({ command: "Vie\u0323\u0302t" })).toBeNull();
   });
 });
 

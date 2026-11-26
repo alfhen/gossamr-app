@@ -44,7 +44,13 @@ function Lines({ lines, mark, tone = "" }: { lines: Seg[][]; mark?: "−" | "+";
  */
 export function RequestInput({ kind, input }: { kind: PermissionKind; input: unknown }) {
   const fields = inputFields(kind, input);
-  if (!fields.length) return null;
+  // A request with no fields at all says so, in a box that can be read and counted as seen like any other.
+  if (!fields.length)
+    return input != null && typeof input === "object" ? (
+      <p data-request-input className="m-0 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5 text-sm text-ws-ink2">
+        This request has no input.
+      </p>
+    ) : null;
   return (
     // No height cap: a box that scrolled could keep the end of a command out of sight while Allow is in reach.
     <dl data-request-input className="selectable m-0 grid gap-2 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5">
@@ -52,7 +58,7 @@ export function RequestInput({ kind, input }: { kind: PermissionKind; input: unk
         <div key={i} data-input-field className="grid gap-0.5">
           <dt className="font-mono text-xs whitespace-pre-wrap text-ws-ink3">
             <Segs segs={field.name} />
-            {field.type === "text" && field.valueType && <span className="font-sans"> ({field.valueType})</span>}
+            {field.valueType && <span className="font-sans"> ({field.valueType})</span>}
           </dt>
           <dd className="m-0 font-mono text-sm break-words whitespace-pre-wrap text-ws-ink [tab-size:4]">
             {field.type === "text" ? (

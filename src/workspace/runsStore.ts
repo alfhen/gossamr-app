@@ -237,6 +237,8 @@ function offerRestore(get: () => RunsState, ids: readonly string[], text: string
 
 let stop: (() => void) | null = null;
 let seq = 0;
+/** Counts the store's lives (each `init` and `dispose`), so an answer settles only into the life it was sent in. */
+let life = 0;
 
 export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
@@ -276,7 +278,10 @@ export const useRuns = create<RunsState>((set, get) => ({
     stop?.();
     stop = null;
     seq++;
-    set({ backend: null, ...idle });
+    life++;
+    // An answer still on its way belongs to the backend being left: its mark goes with it, or the request could not be
+    // answered again on a return there.
+    set({ backend: null, ...idle, permissionAnswering: new Map(), permissionRefused: new Map(), permissionHover: null });
   },
 
   async reload() {
@@ -403,7 +408,8 @@ export const useRuns = create<RunsState>((set, get) => ({
     refused.delete(key);
     set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]), permissionRefused: refused });
     // An answer that settles after the store moved to another backend belongs to the old one, and touches nothing now.
-    const same = () => get().backend === backend;
+    const mine = life;
+    const same = () => life === mine && get().backend === backend;
     try {
       await backend.runsAnswerPermission(id, request, decision);
       if (!same()) return true;

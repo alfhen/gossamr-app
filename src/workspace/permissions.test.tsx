@@ -6,7 +6,7 @@ import { needs } from "../lib/needs";
 import type { PermissionRequest, Run } from "../types";
 import { rowText } from "./AgentParts";
 import { NO_FILTERS } from "./agentsLogic";
-import { PermissionItemView, bandOnTop } from "./PermissionRequests";
+import { PermissionItemView, bandOnTop, wholeIn } from "./PermissionRequests";
 import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, runAnswerPending, subjectLine } from "./permissionLogic";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
@@ -68,6 +68,35 @@ describe("a permission request's item", () => {
       expect(onScreen(html), key).toContain(why);
     }
     expect(denyOnlyWhy(request())).toBeNull();
+  });
+
+  it("offers no Allow where the page can't show the input exactly: a stack of combining marks, or an integer past 2^53", () => {
+    const marks = `x${"\u0301\u0302\u0303"}`;
+    for (const [input, why] of [
+      [{ command: marks }, "Part of this is a stack of marks Gossamr shows only as a count, so it can only be denied."],
+      [{ id: 2 ** 53 + 2 }, "Gossamr can't show this request exactly, so it can only be denied."],
+    ] as const) {
+      const html = item(request({ input }));
+      expect(buttons(html).map((b) => b.text)).not.toContain("Allow");
+      expect(unescape(html)).toContain(why);
+    }
+    // As the app sends it, marked deny-only, it says the app's words.
+    expect(denyOnlyWhy({ denyOnly: true, input: { amount_cents: 2 ** 53 + 2 } })).toBe("Gossamr can't show this request exactly, so it can only be denied.");
+    // A request with no fields is all shown, and can be allowed.
+    expect(buttons(item(request({ input: {} }))).map((b) => b.text)).toContain("Allow");
+  });
+
+  it("tells a tall request that can only be denied that it can only be denied, not to scroll to an Allow it won't get", () => {
+    const tall = renderToStaticMarkup(<PermissionItemView name="R1" request={request({ masked: true })} answering={null} tall onAnswer={vi.fn()} />);
+    expect(unescape(tall)).toContain("This request is taller than your screen. It can only be denied, here or at its end.");
+    expect(unescape(tall)).not.toContain("Allow is at its end");
+  });
+
+  it("counts a band as all in view only when the whole of it is in the window, to within a pixel", () => {
+    expect(wholeIn({ left: 0, top: 100, width: 400, height: 360 }, 800, 600)).not.toBeNull();
+    expect(wholeIn({ left: 0, top: 243, width: 400, height: 360 }, 800, 600)).toBeNull();
+    expect(wholeIn({ left: 0, top: 240.5, width: 400, height: 360 }, 800, 600)).not.toBeNull();
+    expect(wholeIn({ left: 0, top: -3, width: 400, height: 360 }, 800, 600)).toBeNull();
   });
 
   it("never offers Allow where the input isn't all on screen, even unmarked", () => {
@@ -327,6 +356,33 @@ describe("the runs store's permission answer", () => {
     await pending;
     expect(useRuns.getState().permissionAnswered.size).toBe(0);
     expect([...useRuns.getState().permissionAnswering.keys()]).toEqual(["other"]);
+  });
+
+  it("leaves no answer marked on its way after a switch of backend, so a return there can answer the request again", async () => {
+    const first = seeded();
+    vi.spyOn(first, "runsAnswerPermission").mockImplementation(() => new Promise(() => {}));
+    useRuns.getState().init(first);
+    void useRuns.getState().answerPermission(byKey(first, "CA-407").id, "perm-1", "allow");
+    expect(useRuns.getState().permissionAnswering.size).toBe(1);
+    useRuns.getState().init(seeded());
+    expect(useRuns.getState().permissionAnswering.size).toBe(0);
+    const back = seeded();
+    useRuns.getState().init(back);
+    expect(await useRuns.getState().answerPermission(byKey(back, "CA-407").id, "perm-1", "deny")).toBe(true);
+  });
+
+  it("lets an answer settle only into the store's life it was sent in, even with the same backend", async () => {
+    const backend = seeded();
+    let release: () => void = () => {};
+    vi.spyOn(backend, "runsAnswerPermission").mockImplementation(() => new Promise((r) => (release = () => r(byKey(backend, "CA-407")))));
+    useRuns.getState().init(backend);
+    const pending = useRuns.getState().answerPermission(byKey(backend, "CA-407").id, "perm-1", "allow");
+    useRuns.getState().init(backend);
+    useRuns.setState({ permissionAnswering: new Map([[`${byKey(backend, "CA-407").id}\u0000perm-1`, "deny"]]) });
+    release();
+    await pending;
+    expect(useRuns.getState().permissionAnswered.size).toBe(0);
+    expect([...useRuns.getState().permissionAnswering.values()]).toEqual(["deny"]);
   });
 
   it("says why an answer was refused", async () => {
