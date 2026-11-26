@@ -6,7 +6,9 @@ import { hides, inputFields, lines, placeholder, segments, type InputField, type
 const flat = (segs: Seg[]) => segs.map((s) => ("text" in s ? s.text : s.hidden)).join("");
 const names = (fields: InputField[]) => fields.map((f) => flat(f.name));
 const textOf = (field: InputField) => (field.type === "text" ? field.lines.map(flat) : [...field.removed.map((l) => `-${flat(l)}`), ...field.added.map((l) => `+${flat(l)}`)]);
-const shown = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+const ENTITIES: Record<string, string> = { "&quot;": '"', "&#x27;": "'", "&lt;": "<", "&gt;": ">", "&amp;": "&" };
+/** The text on screen: markup gone, each entity decoded once. */
+const shown = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&quot;|&#x27;|&lt;|&gt;|&amp;/g, (e) => ENTITIES[e]);
 
 describe("what a terminal would hide", () => {
   it("is marked: control characters, ANSI escapes, bidirectional marks and zero-width characters", () => {
@@ -116,6 +118,62 @@ describe("the review's examples", () => {
   });
 });
 
+describe("what the fields say about themselves", () => {
+  it("names the type of a value that isn't text, so false and \"false\" read apart", () => {
+    const fields = inputFields("tool", { flag: false, word: "false", count: 3, gone: null, items: [] });
+    expect(fields.map((f) => [flat(f.name), f.type === "text" ? f.valueType : "change"])).toEqual([
+      ["flag", "boolean"],
+      ["word", undefined],
+      ["count", "number"],
+      ["gone", "null"],
+      ["items", "list"],
+    ]);
+    const html = renderToStaticMarkup(<RequestInput kind="tool" input={{ flag: false, word: "false" }} />);
+    expect(shown(html)).toContain("flag (boolean)");
+    expect(shown(html)).not.toContain("word (");
+  });
+
+  it("shows an empty list of edits as a field, not nothing", () => {
+    expect(inputFields("file_change", { file_path: "a", edits: [] }).map((f) => flat(f.name))).toEqual(["file_path", "edits"]);
+  });
+
+  it("keeps a field name's spaces, so \"a  b\" and \"a b\" read apart", () => {
+    expect(renderToStaticMarkup(<RequestInput kind="tool" input={{ "a  b": 1 }} />)).toMatch(/<dt[^>]*whitespace-pre-wrap/);
+  });
+
+  it("says to a screen reader which lines are removed and which added", () => {
+    const html = renderToStaticMarkup(<RequestInput kind="file_change" input={{ file_path: "a", old_string: "old", new_string: "new" }} />);
+    expect(shown(html)).toContain("Removed: old");
+    expect(shown(html)).toContain("Added: new");
+  });
+
+  it("shows text that spells an entity as itself", () => {
+    expect(shown(renderToStaticMarkup(<RequestInput kind="command" input={{ command: "echo &lt; &amp;" }} />))).toContain("echo &lt; &amp;");
+  });
+});
+
+describe("combining marks", () => {
+  const marks = (n: number) => Array.from({ length: n }, (_, i) => String.fromCodePoint(0x300 + (i % 48))).join("");
+
+  it("are one placeholder when more than two stack on one character, so they can't draw over the lines around", () => {
+    expect(flat(segments(`x${marks(60)}y`))).toBe("x⟨60 combining marks⟩y");
+    expect(flat(segments(`${"x" + marks(60)}`.repeat(2)))).toBe("x⟨60 combining marks⟩x⟨60 combining marks⟩");
+  });
+
+  it("stay as they are up to two on a character, as accented words have them", () => {
+    const word = "Vie\u0323\u0302t";
+    expect(flat(segments(word))).toBe(word);
+  });
+
+  it("are kept to their line's own box on screen, and the lines above and below are drawn as they are", () => {
+    const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: `pnpm test\n${"x" + marks(60)}\necho done` }} />);
+    expect(shown(html)).toContain("x⟨60 combining marks⟩");
+    expect(html).toContain(">pnpm test<");
+    expect(html).toContain(">echo done<");
+    for (const line of html.match(/<div data-line[^>]*>/g) ?? []) expect(line).toContain("overflow-hidden");
+  });
+});
+
 describe("the input on screen", () => {
   it("shows every field and value as text, never as HTML, with hidden characters marked", () => {
     const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: "echo <b>hi</b>\nrm -rf ‮tmp", dangerouslyDisableSandbox: true }} />);
@@ -128,7 +186,8 @@ describe("the input on screen", () => {
 
   it("is never capped in height, so a long input can't scroll out of sight beside Allow", () => {
     const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("\n") }} />);
-    expect(html).not.toMatch(/max-h-|overflow-(auto|scroll|hidden)/);
+    // The box itself; each line clips only what stacks out of its own row.
+    expect(html.match(/<dl[^>]*>/)![0]).not.toMatch(/max-h-|overflow-(auto|scroll|hidden)/);
     expect(shown(html)).toContain("echo 59");
   });
 

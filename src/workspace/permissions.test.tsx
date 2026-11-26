@@ -131,14 +131,18 @@ describe("a permission request's item", () => {
   });
 
   it("counts a band as on screen only when the request is on top all across it, not partly under a sheet or a header", () => {
-    // A page: the request, and beside it a sheet (with a word in it) and Pip's small floating button.
+    // A page: the request, and beside it a sheet (with a word in it), Pip's launcher, a toast and a wall of small tiles.
     const page = { contains: () => true, parentElement: null } as unknown as Element;
     const root = { contains: (n: unknown) => n === inside, parentElement: page } as unknown as Element;
-    const inside = { parentElement: root } as unknown as Element;
-    const box = (width: number, height: number) => () => ({ width, height }) as DOMRect;
-    const sheet = { parentElement: page, contains: (n: unknown) => n === word, getBoundingClientRect: box(520, 720) } as unknown as Element;
-    const word = { parentElement: sheet, contains: () => false, getBoundingClientRect: box(40, 16) } as unknown as Element;
-    const pip = { parentElement: page, contains: () => false, getBoundingClientRect: box(64, 64) } as unknown as Element;
+    const inside = { parentElement: root, closest: () => null } as unknown as Element;
+    const box = (left: number, top: number, width: number, height: number) => () => ({ left, top, width, height, right: left + width, bottom: top + height }) as DOMRect;
+    const el = (rect: () => DOMRect, launcher = false, holds: unknown = null) => ({ parentElement: page, contains: (n: unknown) => n === holds, closest: () => (launcher ? {} : null), getBoundingClientRect: rect }) as unknown as Element;
+    const sheet = el(box(250, 0, 520, 720));
+    const word = { parentElement: sheet, contains: () => false, closest: () => null, getBoundingClientRect: box(300, 150, 40, 16) } as unknown as Element;
+    (sheet as unknown as { contains(n: unknown): boolean }).contains = (n) => n === word;
+    const pip = el(box(330, 180, 120, 120), true);
+    const toast = el(box(340, 260, 40, 20));
+    const tiles = Array.from({ length: 15 }, (_, i) => el(box((i % 5) * 80, 100 + Math.floor(i / 5) * 67, 40, 40)));
     const entry = { intersectionRect: { left: 0, top: 100, width: 400, height: 200 } as DOMRect };
     const at: [number, number][] = [];
     expect(bandOnTop(entry, root, (x, y) => (at.push([x, y]), inside))).toBe(true);
@@ -147,8 +151,12 @@ describe("a permission request's item", () => {
     expect(at).toContainEqual([360, 250]);
     // A sheet over the right of the band, met at a word in it, is the sheet.
     expect(bandOnTop(entry, root, (x) => (x > 250 ? word : inside))).toBe(false);
-    // Pip's button over a corner is passed over.
+    // Pip's launcher is passed over by name, though it is larger than a small cover.
     expect(bandOnTop(entry, root, (x, y) => (x > 350 && y > 200 ? pip : inside))).toBe(true);
+    // A small cover alone passes; many small ones add up and don't.
+    expect(bandOnTop(entry, root, (x, y) => (x > 350 && y > 200 ? toast : inside))).toBe(true);
+    let n = 0;
+    expect(bandOnTop(entry, root, () => tiles[n++ % tiles.length])).toBe(false);
     expect(bandOnTop(entry, root, () => null)).toBe(false);
   });
 
@@ -183,7 +191,12 @@ describe("a run with open permission requests", () => {
     expect(n.why).toMatch(/wants to run a command with Bash: pnpm vitest run src\/campaigns\/sendTime\.test\.ts .*…$/);
     expect([...n.why.split(": ").slice(1).join(": ")].length).toBeLessThanOrEqual(81);
     const two = needsOf([{ ...byKey(seeded(), "WEB-100"), permissions: [request({ id: "a", subject: "pnpm test src/a.test.ts" }), request({ id: "b", subject: "git push --force origin main" })] }]);
-    expect(two.map((x) => x.why.split(": ")[1])).toEqual(["pnpm test src/a.test.ts", "git push --force origin main"]);
+    expect(two.map((x) => x.why.split(": ")[1])).toEqual(["pnpm test src/a.test.ts (request 1 of 2)", "git push --force origin main (request 2 of 2)"]);
+    // Two that start alike are told apart by which they are, the same words their headings show.
+    const alike = needsOf([{ ...byKey(seeded(), "WEB-100"), permissions: [request({ id: "a", subject: "echo ready\nrm -rf build" }), request({ id: "b", subject: "echo ready\ngit push" })] }]);
+    expect(alike[0].why).toMatch(/echo ready… \(request 1 of 2\)$/);
+    expect(alike[1].why).toMatch(/echo ready… \(request 2 of 2\)$/);
+    expect(renderToStaticMarkup(<PermissionItemView name="R1" ordinal="request 2 of 2" request={request()} answering={null} onAnswer={vi.fn()} />)).toContain("(request 2 of 2)");
     expect(subjectLine("ls \u202Etxt.hs\nrm -rf /")).toBe("ls ⟨U+202E⟩txt.hs…");
   });
 
@@ -300,6 +313,20 @@ describe("the runs store's permission answer", () => {
     backend.runs.withdrawPermission(byKey(backend, "WEB-100").id, "perm-2");
     await useRuns.getState().reload();
     expect(epoch(), "a request withdrawn in another run").toBeGreaterThan(answered);
+  });
+
+  it("leaves the new store alone when an answer to the old backend settles after it changed", async () => {
+    const old = seeded();
+    let release: () => void = () => {};
+    vi.spyOn(old, "runsAnswerPermission").mockImplementation(() => new Promise((r) => (release = () => r(byKey(old, "CA-407")))));
+    useRuns.getState().init(old);
+    const pending = useRuns.getState().answerPermission(byKey(old, "CA-407").id, "perm-1", "allow");
+    useRuns.getState().init(seeded());
+    useRuns.setState({ permissionAnswering: new Map([["other", "deny"]]) });
+    release();
+    await pending;
+    expect(useRuns.getState().permissionAnswered.size).toBe(0);
+    expect([...useRuns.getState().permissionAnswering.keys()]).toEqual(["other"]);
   });
 
   it("says why an answer was refused", async () => {

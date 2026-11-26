@@ -31,12 +31,14 @@ function scrollerOf(el: Element): Element | null {
   return null;
 }
 
-/** Where `el` sits in its scroller's content (or the page's), whatever is scrolled into view. */
+/**
+ * Where `el` sits on screen with its scroller's own scrolling taken out: a scroll of the list is the person's, but the
+ * list itself moving on screen, as when something above it grows, moves `el` as much as a change inside it.
+ */
 function place(el: Element, scroller: Element | null): { x: number; y: number } {
   const own = el.getBoundingClientRect();
   if (!scroller) return { x: own.left + window.scrollX, y: own.top + window.scrollY };
-  const box = scroller.getBoundingClientRect();
-  return { x: own.left - box.left + scroller.scrollLeft, y: own.top - box.top + scroller.scrollTop };
+  return { x: own.left + scroller.scrollLeft, y: own.top + scroller.scrollTop };
 }
 
 /** Notes a move of `at` since it was last seen; true when it moved. */

@@ -5,7 +5,7 @@ import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
 import type { PermissionRequest, Run } from "../types";
 import { CodeBox } from "./AgentSheet";
-import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants, runAnswerPending } from "./permissionLogic";
+import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants, requestOrdinal, runAnswerPending } from "./permissionLogic";
 import { RequestInput } from "./RequestInput";
 import { useRuns, type PermissionHover } from "./runsStore";
 
@@ -58,7 +58,7 @@ export function PermissionItem({ run, request, label, size, where, index = 0 }: 
   };
   return (
     <div ref={root} onPointerEnter={note} onPointerDown={note} onPointerLeave={leave}>
-      <PermissionItemView name={name} request={request} answering={answering ?? null} held={held} unread={!seen} tall={tall} bands={bands} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
+      <PermissionItemView name={name} ordinal={requestOrdinal(run, request.id)} request={request} answering={answering ?? null} held={held} unread={!seen} tall={tall} bands={bands} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
     </div>
   );
 }
@@ -87,52 +87,65 @@ function afterAnswer(from: HTMLElement): () => void {
   };
 }
 
-/** The share of a band that must be in view for it to count as seen. */
-const SEEN_SHARE = 0.6;
+/** The share of a band that must be in view for it to count as seen: all of it, short of rounding, so no line of it is left below the edge. */
+const SEEN_SHARE = 0.99;
 
-/** How tall each band is: half the window, so most of one always fits on screen at once. */
+/** How tall each band is: half the window, so all of one fits on screen at once, below a header. */
 const bandStep = () => Math.max(80, Math.floor(window.innerHeight / 2));
 
 /** Where a band is looked at, as shares of what is in view of it: across its width, at three heights. */
 const LOOK_X = [0.1, 0.3, 0.5, 0.7, 0.9];
 const LOOK_Y = [0.25, 0.5, 0.75];
 
-/** The largest share of a band a covering thing may take and still be passed over: a small floating control, not a pane. */
+/** The largest share of a band that covers may take between them and still be passed over: a toast, not a pane. */
 const SMALL_COVER = 0.1;
 
+/** Pip's launcher floats over a corner of the page, and a request that can't scroll from under it must still be readable. */
+const PASSED_OVER = "[data-pip-launcher]";
+
 /**
- * What covers a band at a point, taken whole: from the element on top, up to the largest part of the page that doesn't hold
- * the request, so a word in the run sheet counts as the sheet.
+ * What covers a band at a point, taken whole: the largest box from the element on top up to the largest part of the page
+ * that doesn't hold the request, so a word in the run sheet counts as the sheet, and a tile of a wall as the tile (a wall's
+ * own box can be empty, its tiles fixed).
  */
 function coverOf(top: Element, root: Node): Element {
+  const area = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return r.width * r.height;
+  };
   let cover = top;
-  while (cover.parentElement && !cover.parentElement.contains(root)) cover = cover.parentElement;
+  for (let at: Element | null = top; at && !at.contains(root); at = at.parentElement) if (area(at) > area(cover)) cover = at;
   return cover;
 }
 
 /**
- * Whether the request is on top everywhere a band is looked at, across what is in view of it: a band under a sticky
- * header, or partly under the run sheet or a pane, is in the viewport but not all on screen. A small floating control
- * over a corner, such as Pip's button, is passed over, or a request that can't scroll from under it could never be read.
- * `topAt` is `document.elementFromPoint`.
+ * Whether the request is on top across a band, looked at in what is in view of it: a band under a sticky header, or partly
+ * under the run sheet or a pane, is in the viewport but not all on screen. Pip's launcher is passed over by name; every
+ * other cover met is added up by its area over the band, and together they may take only `SMALL_COVER` of it. It sees only
+ * what takes pointer events: an opaque overlay with `pointer-events: none` must take them, or this check can't see it, and a
+ * cover small enough to fall between the points isn't met. `topAt` is `document.elementFromPoint`.
  */
 export function bandOnTop(entry: Pick<IntersectionObserverEntry, "intersectionRect">, root: Node, topAt: (x: number, y: number) => Element | null): boolean {
   const r = entry.intersectionRect;
-  const area = r.width * r.height;
-  return LOOK_Y.every((dy) =>
-    LOOK_X.every((dx) => {
+  const covers = new Set<Element>();
+  for (const dy of LOOK_Y)
+    for (const dx of LOOK_X) {
       const top = topAt(r.left + r.width * dx, r.top + r.height * dy);
       if (!top) return false;
-      if (root.contains(top)) return true;
-      const cover = coverOf(top, root).getBoundingClientRect();
-      return cover.width * cover.height < area * SMALL_COVER;
-    }),
-  );
+      if (root.contains(top) || top.closest(PASSED_OVER)) continue;
+      covers.add(coverOf(top, root));
+    }
+  let covered = 0;
+  for (const cover of covers) {
+    const c = cover.getBoundingClientRect();
+    covered += Math.max(0, Math.min(c.left + c.width, r.left + r.width) - Math.max(c.left, r.left)) * Math.max(0, Math.min(c.top + c.height, r.top + r.height) - Math.max(c.top, r.top));
+  }
+  return covered < r.width * r.height * SMALL_COVER;
 }
 
 /**
  * Reads how much of the request has been on screen since the item appeared. The request is laid in bands by height (see
- * `bandStep`), drawn over it as `[data-seen-part]`; each counts once most of it has been in view with the request on top
+ * `bandStep`), drawn over it as `[data-seen-part]`; each counts once all of it has been in view with the request on top
  * there. A request that fits on screen is seen at once; a long one, even one long line, only once scrolled through, not
  * by a jump to its end. `tall`: the item is taller than the window, so it says why Allow is off and offers Deny at its top.
  */
@@ -144,7 +157,7 @@ function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall:
     const area = item?.querySelector<HTMLElement>("[data-seen-area]");
     if (!item || !area || typeof ResizeObserver === "undefined") return;
     const measure = () => setSize((was) => {
-      const now = { area: Math.ceil(area.getBoundingClientRect().height), item: item.getBoundingClientRect().height, step: bandStep() };
+      const now = { area: Math.floor(area.getBoundingClientRect().height), item: item.getBoundingClientRect().height, step: bandStep() };
       return was && was.area === now.area && was.item === now.item && was.step === now.step ? was : now;
     });
     const sizes = new ResizeObserver(measure);
@@ -183,7 +196,7 @@ function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall:
         }
         tick();
       },
-      { threshold: [0, SEEN_SHARE, 1] },
+      { threshold: [0, 0.5, SEEN_SHARE, 1] },
     );
     parts.forEach((part) => watch.observe(part));
     // What covered a band may go without the band moving: look again when anything scrolls.
@@ -282,7 +295,7 @@ const UNREAD = "Scroll through the whole request to allow it.";
 /** How long after a click a second one at the same spot, on what moved under it, is ignored. */
 export const REPEAT_MS = 1000;
 
-export function PermissionItemView({ name, request, answering, held = null, unread = false, tall = false, bands = { area: 0, step: 0 }, refused = null, hint = null, size = "md", onAnswer, onMissed }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; tall?: boolean; bands?: Bands; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void }) {
+export function PermissionItemView({ name, ordinal = null, request, answering, held = null, unread = false, tall = false, bands = { area: 0, step: 0 }, refused = null, hint = null, size = "md", onAnswer, onMissed }: { name: string; ordinal?: string | null; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; tall?: boolean; bands?: Bands; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void }) {
   const why = denyOnlyWhy(request);
   const off = !!answering || !!held;
   const title = held ?? undefined;
@@ -291,6 +304,7 @@ export function PermissionItemView({ name, request, answering, held = null, unre
     <div data-permission-request={request.id} className="grid gap-2">
       <p data-permission-heading tabIndex={-1} className="m-0 font-semibold text-ws-ink outline-none focus-visible:outline-2 focus-visible:outline-ws-pip">
         {name} wants to {permissionWants(request)}
+        {ordinal && <span className="font-normal text-ws-ink2"> ({ordinal})</span>}
       </p>
       {/* Taller than the window, a request offers Deny before it too, since denying unseen is safe, and says why Allow is off
           in words the keyboard and a screen reader reach. Allow stays after all of it. */}

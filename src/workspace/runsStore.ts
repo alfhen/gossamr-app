@@ -402,21 +402,27 @@ export const useRuns = create<RunsState>((set, get) => ({
     const refused = new Map(get().permissionRefused);
     refused.delete(key);
     set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]), permissionRefused: refused });
+    // An answer that settles after the store moved to another backend belongs to the old one, and touches nothing now.
+    const same = () => get().backend === backend;
     try {
       await backend.runsAnswerPermission(id, request, decision);
+      if (!same()) return true;
       // Request ids are the harness's and never come back, so the key stays: the item is gone by the next read.
       set({ permissionAnswered: new Set([...get().permissionAnswered, key]), permissionDecided: new Map([...get().permissionDecided, [key, decision]]), permissionEpoch: get().permissionEpoch + 1 });
       return true;
     } catch (e) {
+      if (!same()) return false;
       // The item keeps the reason until the next answer: a toast alone goes away.
       set({ permissionRefused: new Map([...get().permissionRefused, [key, messageOf(e)]]) });
       useToasts.getState().push(`Couldn't ${decision} it: ${messageOf(e)}`);
       return false;
     } finally {
-      const left = new Map(get().permissionAnswering);
-      left.delete(key);
-      set({ permissionAnswering: left });
-      void get().reload();
+      if (same()) {
+        const left = new Map(get().permissionAnswering);
+        left.delete(key);
+        set({ permissionAnswering: left });
+        void get().reload();
+      }
     }
   },
 

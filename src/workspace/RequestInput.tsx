@@ -23,12 +23,14 @@ function Lines({ lines, mark, tone = "" }: { lines: Seg[][]; mark?: "−" | "+";
   return (
     <>
       {lines.map((line, i) => (
-        <div key={i} data-line={mark ?? ""} className={`min-h-[1lh] ${tone}`}>
+        // Each line keeps to its own box, with room for one mark above and below: what stacks higher can't draw over the lines around it.
+        <div key={i} data-line={mark ?? ""} className={`min-h-[1lh] overflow-hidden leading-[1.9] ${tone}`}>
           {mark && (
             <span aria-hidden className="select-none pr-1">
               {mark}
             </span>
           )}
+          {mark && <span className="sr-only">{mark === "−" ? "Removed: " : "Added: "}</span>}
           <Segs segs={line} />
         </div>
       ))}
@@ -48,8 +50,9 @@ export function RequestInput({ kind, input }: { kind: PermissionKind; input: unk
     <dl data-request-input className="selectable m-0 grid gap-2 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5">
       {fields.map((field, i) => (
         <div key={i} data-input-field className="grid gap-0.5">
-          <dt className="font-mono text-xs text-ws-ink3">
+          <dt className="font-mono text-xs whitespace-pre-wrap text-ws-ink3">
             <Segs segs={field.name} />
+            {field.type === "text" && field.valueType && <span className="font-sans"> ({field.valueType})</span>}
           </dt>
           <dd className="m-0 font-mono text-sm break-words whitespace-pre-wrap text-ws-ink [tab-size:4]">
             {field.type === "text" ? (

@@ -37,6 +37,12 @@ export function permissionsRow(requests: readonly PermissionRequest[]): string {
   return requests.length === 1 ? `Wants to ${permissionWants(requests[0])}` : `Asks for ${requests.length} permissions`;
 }
 
+/** Which of a run's open requests this is, when it has more than one: the same words in its Needs you row and its heading. */
+export function requestOrdinal(run: Pick<Run, "permissions">, requestId: string): string | null {
+  const open = openPermissions(run);
+  return open.length > 1 ? `request ${open.findIndex((p) => p.id === requestId) + 1} of ${open.length}` : null;
+}
+
 /** Characters of the subject a Needs you row shows, so two requests of one kind can be told apart. */
 const ROW_CHARS = 80;
 

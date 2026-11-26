@@ -4,7 +4,7 @@ import type { PermissionKind } from "../types";
 export type Seg = { text: string } | { hidden: string; label: string };
 
 /** A field of a request's input, by its own name: plain text as lines, or a change as the lines it removes and adds. */
-export type InputField = { name: Seg[]; type: "text"; lines: Seg[][] } | { name: Seg[]; type: "change"; removed: Seg[][]; added: Seg[][] };
+export type InputField = { name: Seg[]; type: "text"; lines: Seg[][]; valueType?: string } | { name: Seg[]; type: "change"; removed: Seg[][]; added: Seg[][] };
 
 const NAMES: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
 
@@ -25,19 +25,41 @@ export function hides(code: number): boolean {
 const codeName = (code: number) => NAMES[code] ?? `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
 export const placeholder = (code: number) => `⟨${codeName(code)}⟩`;
 
-/** `text` with every character a terminal would hide marked, as segments. */
+/** A combining mark, drawn on the character before it. */
+const MARK = /[\p{Mn}\p{Me}]/u;
+
+/** Combining marks on one character from which they are one placeholder: more stack over the lines around them. */
+const MARKS_SHOWN = 2;
+
+/** `text` with every character a terminal would hide marked, and a stack of combining marks counted, as segments. */
 export function segments(text: string): Seg[] {
   const out: Seg[] = [];
+  const chars = Array.from(text);
   let plain = "";
-  for (const ch of text) {
-    const code = ch.codePointAt(0)!;
-    if (!hides(code)) {
-      plain += ch;
-      continue;
-    }
+  const mark = (seg: Seg) => {
     if (plain) out.push({ text: plain });
     plain = "";
-    out.push({ hidden: placeholder(code), label: `hidden character ${codeName(code)}` });
+    out.push(seg);
+  };
+  for (let i = 0; i < chars.length; ) {
+    const code = chars[i].codePointAt(0)!;
+    if (hides(code)) {
+      mark({ hidden: placeholder(code), label: `hidden character ${codeName(code)}` });
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end < chars.length && MARK.test(chars[end]) && !hides(chars[end].codePointAt(0)!)) end++;
+    if (end - i > MARKS_SHOWN) {
+      mark({ hidden: `⟨${end - i} combining marks⟩`, label: `${end - i} combining marks` });
+      i = end;
+    } else if (end > i) {
+      plain += chars.slice(i, end).join("");
+      i = end;
+    } else {
+      plain += chars[i];
+      i++;
+    }
   }
   if (plain) out.push({ text: plain });
   return out;
@@ -66,7 +88,9 @@ export function lines(text: string): Seg[][] {
 }
 
 const asText = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
-const text = (name: string, value: unknown): InputField => ({ name: segments(name), type: "text", lines: lines(asText(value)) });
+/** The type of a value that isn't text, named beside its field, so `false` the value and "false" the text read apart. */
+const typeOf = (value: unknown): string | undefined => (typeof value === "string" ? undefined : value === null ? "null" : Array.isArray(value) ? "list" : typeof value);
+const text = (name: string, value: unknown): InputField => ({ name: segments(name), type: "text", lines: lines(asText(value)), ...(typeOf(value) ? { valueType: typeOf(value) } : {}) });
 const change = (name: string, removed: unknown, added: unknown): InputField => ({ name: segments(name), type: "change", removed: removed == null || removed === "" ? [] : lines(asText(removed)), added: added == null || added === "" ? [] : lines(asText(added)) });
 
 /** The fields a kind puts first, in the order a person reads them. */
@@ -113,7 +137,7 @@ export function inputFields(kind: PermissionKind, input: unknown): InputField[] 
       done.add("content");
     }
     const edits = value.edits;
-    if (Array.isArray(edits) && edits.every(isRecord)) {
+    if (Array.isArray(edits) && edits.length > 0 && edits.every(isRecord)) {
       edits.forEach((edit, i) => out.push(...editFields(`edits[${i}].`, edit)));
       done.add("edits");
     }
