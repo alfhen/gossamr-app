@@ -333,11 +333,17 @@ pub fn render_prompt_from(spec: &RunSpec, start: Start) -> String {
         ));
     }
     parts.push(without_markers(spec.brief.trim()));
-    if spec.report {
-        parts.push("Gossamr's tools: call `report` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
-    }
-    if spec.report {
-        parts.push("Write your full prose report in `report.note`. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+    // A harness session has no `report`: its report is the harness's own `result`, with the same status and note.
+    match (spec.report, start) {
+        (false, _) => {}
+        (true, Start::OwnCheckout) => {
+            parts.push("Gossamr's tools: call `report` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
+            parts.push("Write your full prose report in `report.note`. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+        }
+        (true, Start::HarnessWorktree) => {
+            parts.push("Gossamr's tools: call `result` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
+            parts.push("Write your full prose report in `result.note`, with `status` done or blocked. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+        }
     }
     parts.push("Don't write to Jira. Push no branch but your own and open pull requests as drafts; never merge one or mark it ready. Never check out a branch from a fork.".into());
     // The harness's own guard names no TICKET markers, so the brief carries rule 5 for them itself.
@@ -901,12 +907,24 @@ mod tests {
         assert_eq!(own.split("\n\n").nth(1), Some(old), "the old path's step, word for word");
         assert_eq!(render_prompt_from(&ticketed(), Start::OwnCheckout), own);
         let harness = render_prompt_from(&ticketed(), Start::HarnessWorktree);
-        assert_eq!(harness, own.replacen(old, made, 1), "the same brief but for where its worktree is");
+        let quiet = RunSpec { report: false, ..ticketed() };
+        assert_eq!(render_prompt_from(&quiet, Start::HarnessWorktree), render_prompt(&quiet).replacen(old, made, 1), "the same brief but for where its worktree is");
         assert!(!harness.contains("worktree-") && !harness.contains("git checkout"), "{harness}");
         let pinned = RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..with_role("reviewer") };
         let review = render_prompt_from(&pinned, Start::HarnessWorktree);
         assert_eq!(review.split("\n\n").nth(1), Some("Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main`. Check out the pull request below in it, as it says, and create no other branch."));
         assert!(review.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`"), "the pinned checkout stays: {review}");
+    }
+
+    #[test]
+    fn a_harness_runs_brief_names_the_harnesss_result_tool_for_its_report_and_the_old_paths_names_report() {
+        let own = render_prompt(&ticketed());
+        assert!(own.contains("call `report` when you are done") && own.contains("in `report.note`"), "{own}");
+        let harness = render_prompt_from(&ticketed(), Start::HarnessWorktree);
+        assert!(harness.contains("call `result` when you are done") && harness.contains("in `result.note`, with `status` done or blocked"), "{harness}");
+        assert!(!harness.contains("`report`") && !harness.contains("report.note"), "a harness session has no report tool: {harness}");
+        let quiet = render_prompt_from(&RunSpec { report: false, ..ticketed() }, Start::HarnessWorktree);
+        assert!(!quiet.contains("`result`"), "a run asked for no report is not told of the tool");
     }
 
     #[test]
