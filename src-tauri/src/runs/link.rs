@@ -58,6 +58,14 @@ pub const NOT_RUNNING_TO_ANSWER: &str = "Its agent isn't running any more, so th
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
+/// Why a message did not resume a session and reach it: the harness refused the resume, or took it and then not the
+/// message.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotResumed {
+    Refused(String),
+    NotSent(String),
+}
+
 /// How long `caught_up` waits for an event before it asks the harness again.
 const CAUGHT_UP_TICK: Duration = Duration::from_millis(500);
 
@@ -155,17 +163,28 @@ impl Link {
     /// Resumes a session that is not running with `carry_on` as its prompt, counting it, and follows it again. The harness
     /// refuses one a deny, a cancel, a stop or an open request forbids, or a shutdown gave up on, and says why.
     pub async fn carry_on(&self, session: &str, carry_on: &str) -> Result<(), String> {
-        self.resume(session, carry_on, true).await
+        self.resume(session, Some(carry_on)).await
     }
 
     /// Resumes a session that is not running and sends it the person's or Pip's message as its next prompt. Not as a
     /// carry on: the harness refuses one after a stop, a deny, a cancel or a request left open, which the person's own
     /// choice to go on must not meet. A message starts the count of carry-ons again.
-    pub async fn resume_with(&self, session: &str, text: &str) -> Result<(), String> {
-        self.resume(session, text, false).await
+    pub async fn resume_with(&self, session: &str, text: &str) -> Result<(), NotResumed> {
+        self.resume(session, None).await.map_err(NotResumed::Refused)?;
+        // Asked apart from its follow, as the resume is: a watch that failed must not read as a message that was not
+        // taken. Nothing is open to answer in a session just resumed.
+        self.ask(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map_err(NotResumed::NotSent)?;
+        let follow = self.inner.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
+        if let Err(e) = self.follow(session, follow.seq).await {
+            eprintln!("couldn't follow session {session} after a message resumed it; the next connect follows it: {e}");
+        }
+        Ok(())
     }
 
-    async fn resume(&self, session: &str, prompt: &str, counted: bool) -> Result<(), String> {
+    /// Resumes a session that is not running, with `carry_on` as its prompt, counted, or with none, which starts the
+    /// count again.
+    async fn resume(&self, session: &str, carry_on: Option<&str>) -> Result<(), String> {
+        let counted = carry_on.is_some();
         // While the harness keeps the session no resume is sent: its row says why, and what to do.
         if let Some(why) = self.kept(session).await {
             return Err(why);
@@ -185,9 +204,8 @@ impl Link {
             })
         };
         mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
-        let carry_on = counted.then(|| prompt.to_owned());
         // Asked apart from its follow, so only a refusal puts the marks back.
-        if let Err(why) = self.ask(Op::Resume { session: session.to_owned(), carry_on }).await {
+        if let Err(why) = self.ask(Op::Resume { session: session.to_owned(), carry_on: carry_on.map(str::to_owned) }).await {
             if let Err(e) = mark(carry_ons, cut, false).await {
                 eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
             }
@@ -198,9 +216,6 @@ impl Link {
         let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
         if let Err(e) = self.follow(session, follow.seq).await {
             eprintln!("couldn't follow session {session} after its resume; the next connect follows it: {e}");
-        }
-        if !counted {
-            self.send(session, prompt).await?;
         }
         Ok(())
     }

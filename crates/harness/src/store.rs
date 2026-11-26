@@ -400,7 +400,8 @@ impl Store {
                     "SELECT EXISTS (SELECT 1 FROM events p WHERE p.session = ?1 AND p.type = 'permission'
                          AND p.seq > (SELECT MAX(seq) FROM events WHERE session = ?1 AND type = 'turn_started')
                          AND NOT EXISTS (SELECT 1 FROM events a WHERE a.session = ?1 AND a.seq > p.seq
-                             AND a.type IN ('answered', 'permission_closed') AND json_extract(a.payload, '$.id') = json_extract(p.payload, '$.id')))",
+                             AND a.type IN ('answered', 'permission_closed')
+                             AND coalesce(json_extract(a.payload, '$.id'), json_extract(a.payload, '$.kept.id')) = coalesce(json_extract(p.payload, '$.id'), json_extract(p.payload, '$.kept.id'))))",
                     [id],
                     |row| row.get(0),
                 )?;

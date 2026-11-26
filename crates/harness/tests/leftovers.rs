@@ -949,7 +949,8 @@ fn leftover_whose_turn_had_ended_is_closed_with_no_cut_so_nothing_carries_it_on(
 fn leftover_with_a_permission_request_still_open_may_not_carry_on_as_after_a_shutdown() {
     use harness::event::{Body, Decision, PermissionKind};
     let asked = |id: &str| Body::Permission { id: id.into(), kind: PermissionKind::Tool, tool: "Read".into(), input: serde_json::json!({}) };
-    for (answered, open) in [(false, true), (true, false)] {
+    // Each also once its events were swept, which keeps their ids under `kept`.
+    for (answered, swept, open) in [(false, false, true), (true, false, false), (false, true, true), (true, true, false)] {
         let (_tmp, dir) = data_dir();
         let (child, agent) = agent();
         left_by_a_shutdown(&dir, Some(&agent));
@@ -958,12 +959,15 @@ fn leftover_with_a_permission_request_still_open_may_not_carry_on_as_after_a_shu
         if answered {
             store.append("s", &Body::Answered { id: "r1".into(), decision: Decision::Allow, message: None }, harness::store::now_ms()).unwrap();
         }
+        if swept {
+            assert!(store.sweep(harness::store::now_ms() + 31 * 86_400_000).unwrap() > 0, "swept");
+        }
         drop(store);
         let harness = started_harness(&dir);
         assert_eq!(ended(child), Some(libc::SIGKILL));
         drop(harness);
         assert!(ended_by_the_next_harness(&said(&dir), "stopped it"), "{:?}", said(&dir));
         let marked = opened(&dir).session("s").unwrap().no_carry_on;
-        assert_eq!(marked.as_deref(), open.then_some(harness::store::OPEN_REQUEST_STOPPED), "answered {answered}");
+        assert_eq!(marked.as_deref(), open.then_some(harness::store::OPEN_REQUEST_STOPPED), "answered {answered}, swept {swept}");
     }
 }

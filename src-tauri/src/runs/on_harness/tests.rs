@@ -1892,14 +1892,28 @@ async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with
 
 #[tokio::test]
 async fn a_message_to_a_cut_run_whose_follow_fails_after_the_resume_is_still_sent_and_nothing_is_put_back() {
+    for failing in [1, 2] {
+        message_with_failing_follows(failing).await;
+    }
+}
+
+async fn message_with_failing_follows(failing: usize) {
     let mut served = Served::new(BUILDS_ON, 4);
     let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
-    rig.svc.harness.as_ref().unwrap().link.fail_follows(1);
+    // The resume's follow, then the one after the message: neither may cost the message.
+    rig.svc.harness.as_ref().unwrap().link.fail_follows(failing);
     let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
     assert_eq!(delivery, crate::runs::message::Delivery::Resumed, "the harness took the resume");
     assert!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.cut.is_none(), "the old cut is not put back");
-    until_detail(&rig, &run, "Back on the build.").await;
-    assert!(prompted(&served, &session, "Go on with the build.").await, "the message was sent");
+    let sent = tokio::time::timeout(WAIT, async {
+        while !prompted(&served, &session, "Go on with the build.").await {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    });
+    sent.await.expect("the message reached the agent");
+    if failing == 1 {
+        until_detail(&rig, &run, "Back on the build.").await;
+    }
 }
 
 #[tokio::test]
@@ -1996,4 +2010,48 @@ async fn a_finished_runs_agent_ended_between_turns_leaves_it_done_and_pip_is_not
     assert_eq!((after.state, after.error), (RunState::Done, None));
     let told: Vec<crate::runs::tracker::Attention> = rig.notices.0.lock().unwrap().iter().filter(|(id, ..)| *id == run.id).map(|(_, why, _)| *why).collect();
     assert_eq!(told, [crate::runs::tracker::Attention::Done], "told once that it was done, and nothing of the agent's end");
+}
+
+#[tokio::test]
+async fn a_message_wakes_a_finished_run_whose_session_a_restart_closed_and_the_agent_gets_it() {
+    let mut served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the restart's close was read");
+    assert_eq!(rig.get(&run).await.state, RunState::Done, "a restart leaves a finished run done");
+    // One you stopped, or cleaned up, takes no message.
+    for stopped in [true, false] {
+        let before = rig.get(&run).await;
+        rig.fx.core.apply_session(&session, move |run, f| {
+            if stopped {
+                f.ended = true;
+            } else {
+                run.worktree_removed_at = Some(chrono::Utc::now());
+            }
+            Vec::new()
+        }).await.unwrap();
+        let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+        assert!(refused.contains("takes no message"), "stopped {stopped}: {refused}");
+        rig.fx.core.apply_session(&session, move |run, f| {
+            f.ended = false;
+            run.worktree_removed_at = before.worktree_removed_at;
+            Vec::new()
+        }).await.unwrap();
+    }
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Make it darker.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_detail(&rig, &run, "Back again.").await;
+    assert!(prompted(&served, &session, "Make it darker.").await, "the agent got the message");
+    assert!(!prompted(&served, &session, CARRY_ON).await, "as itself, not a carry on");
 }

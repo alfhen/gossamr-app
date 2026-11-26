@@ -577,16 +577,17 @@ async fn message(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) ->
     in_reach_of_conversation(pip, run.spec.workstream.as_deref())?;
     let text = crate::runs::result::scrub(required(args, "text")?).trim().to_string();
     let name = name_of(st, pip, &run).await;
-    // A message may start the agent again: a finished or stopped run's, or a failed one's whose cut it resumes. A run
-    // that reads as working and whose agent the harness lost is resumed too, which is known only once it is.
+    // A message wakes a finished, stopped or failed run, whichever way it reaches it: it resumes its session, or it is
+    // the next prompt of one still open, which starts a turn. Only a message that does not get through gives its start
+    // back. A run that reads as working and whose agent the harness lost is resumed too, known only once it is.
     let reserved = matches!(run.state, RunState::Done | RunState::Stopped | RunState::Failed);
     if reserved {
         take_start(st, request_id)?;
     }
     let sent = st.driver.message(&run.id, &text).await;
-    match (reserved, matches!(sent, Ok((_, Delivery::Resumed)))) {
-        (true, false) => give_back_start(st, request_id),
-        (false, true) => count_start(st, request_id),
+    match (reserved, &sent) {
+        (true, Err(_)) => give_back_start(st, request_id),
+        (false, Ok((_, Delivery::Resumed))) => count_start(st, request_id),
         _ => {}
     }
     let (_, delivery) = sent.map_err(|e| e.to_string())?;

@@ -85,6 +85,12 @@ fn resumable(follow: &crate::domain::SessionFollow) -> bool {
     follow.closed && !follow.ended && follow.cut.is_some() && follow.question.is_none()
 }
 
+/// A finished run whose session a restart closed, which a message wakes, as on the old path: not one you stopped,
+/// handed over or cleaned up, and not one whose question waits for its answer.
+fn wakes(run: &Run, follow: &crate::domain::SessionFollow) -> bool {
+    run.state == RunState::Done && follow.closed && !follow.ended && !run.handed_over && run.worktree_removed_at.is_none() && follow.question.is_none()
+}
+
 /// What an agent of the old path reads when the move to the harness stopped it.
 pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
@@ -93,6 +99,9 @@ pub use super::consumer::CARRY_ONS;
 
 /// How long the carry on after a restart waits for the app to catch up with the harness's sessions.
 const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Why a message did not reach an agent that its resume started again.
+pub const RESUMED_NOT_SENT: &str = "It started again, but your message didn't reach it, so send it again:";
 
 /// The way on from a carry on the harness's rules refused: a message, which the rules do not govern.
 pub const CARRY_ON_BY_MESSAGE: &str = "Message the agent to go on.";
@@ -406,7 +415,7 @@ impl RunService {
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
-        if !starting && !runs_on && matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) {
+        if !starting && !runs_on && (matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) || wakes(run, &follow)) {
             return Some(self.resume_on_harness(link, session, run, text).await);
         }
         if !starting && !runs_on && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
@@ -424,7 +433,8 @@ impl RunService {
     async fn resume_on_harness(&self, link: &Link, session: &str, run: &Run, text: &str) -> Result<(Run, Delivery)> {
         match link.resume_with(session, text).await {
             Ok(()) => self.load(&run.id).await.map(|run| (run, Delivery::Resumed)),
-            Err(why) => Err(Error::Proposal(format!("The harness didn't resume it: {}", plain_refusal(&why, session)))),
+            Err(super::link::NotResumed::Refused(why)) => Err(Error::Proposal(format!("The harness didn't resume it: {}", plain_refusal(&why, session)))),
+            Err(super::link::NotResumed::NotSent(why)) => Err(Error::Proposal(format!("{RESUMED_NOT_SENT} {}", plain_refusal(&why, session)))),
         }
     }
 

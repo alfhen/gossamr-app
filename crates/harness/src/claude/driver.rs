@@ -1064,9 +1064,13 @@ mod tests {
             let mut link = driver.open_reporting(launch, EndReport(report)).unwrap();
             let agent = link.process.clone().unwrap();
             link.commands.send(Command::Prompt("go".into())).unwrap();
+            // In the turn before the signal, so each case is an end in the middle of one.
+            let mut said = vec![];
+            while !said.contains(&Body::TurnStarted) {
+                said.push(tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the turn starts").expect("the agent runs"));
+            }
             // SAFETY: the fake's own pid, which the driver has not reaped.
             assert_eq!(unsafe { libc::kill(agent.pid as libc::pid_t, signal) }, 0);
-            let mut said = vec![];
             while let Some(body) = tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes") {
                 said.push(body);
             }
