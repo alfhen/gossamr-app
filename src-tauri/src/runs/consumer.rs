@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::redact::redact;
 use super::tracker::cleaned_answer;
-use crate::domain::{Run, RunEvent, RunFailure, RunState, SessionFollow};
+use crate::domain::{PermissionRequest, Run, RunEvent, RunFailure, RunState, SessionFollow};
 
 const TEXT_KEPT: usize = 500;
 const DETAIL_KEPT: usize = 2_048;
@@ -120,10 +120,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             }
         }
         Body::Permission { id, kind, tool, input } => {
-            let what = describe(&tool, &input);
-            // A kind this build does not know is still a request, one the person can only deny.
-            let deny_only = event.cut.is_some() || kind == PermissionKind::Other;
-            follow.permissions.push((id, deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
+            let what = summary(&tool, &input, event.cut.is_some());
+            let asked = request(id.clone(), kind, tool, input, event.cut.is_some());
+            follow.permissions.push((id, asked.deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
+            run.permissions.push(asked);
             rows.add("ask", &format!("Asks to use {what}"), None);
         }
         // An answer to it is refused from now on, so it waits on no one; settling shows what the run waits on instead.
@@ -274,6 +274,51 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::Withheld { .. } => {}
     }
+    waits(run, follow);
+    if run.state != before || !rows.rows.is_empty() {
+        run.last_progress_at = now;
+    }
+    rows.rows
+}
+
+/// Notes that the harness took the person's answer to the open permission request `request`: it waits on no one now,
+/// before its `answered` comes, so a second answer is refused and the run shows what it waits on next.
+pub fn permission_answered(run: &mut Run, follow: &mut SessionFollow, request: &str) {
+    follow.permissions.retain(|(open, ..)| open != request);
+    waits(run, follow);
+}
+
+/// Rebuilds the open requests of a run saved before runs kept them, which only its follow has: from the harness's
+/// `asked` events where it still has them, else deny-only with what the follow kept, since nothing the person did not
+/// see whole may be allowed.
+pub fn recover_permissions(run: &mut Run, follow: &SessionFollow, asked: &[Event]) {
+    let mut kept = std::mem::take(&mut run.permissions);
+    for (id, deny_only, need) in &follow.permissions {
+        if let Some(at) = kept.iter().position(|open| open.id == *id) {
+            run.permissions.push(kept.remove(at));
+            continue;
+        }
+        let read = asked.iter().find_map(|event| match readable(&event.body) {
+            Some(Body::Permission { id: got, kind, tool, input }) if got == *id => Some((kind, tool, input, event.cut.is_some())),
+            _ => None,
+        });
+        run.permissions.push(match read {
+            // The follow's flag is an older build's, which knew fewer reasons: either one denies.
+            Some((kind, tool, input, cut)) => {
+                let read = request(id.clone(), kind, tool, input, cut);
+                PermissionRequest { deny_only: *deny_only || read.deny_only, ..read }
+            }
+            None => {
+                let masked = need.contains(harness::redact::MASK) || need.contains(super::redact::MASK);
+                PermissionRequest { id: id.clone(), kind: PermissionKind::Other, tool: String::new(), subject: need.clone(), input: Value::Null, masked, deny_only: true }
+            }
+        });
+    }
+}
+
+/// What the open requests leave the run waiting on, and what it shows for it.
+fn waits(run: &mut Run, follow: &SessionFollow) {
+    run.permissions.retain(|asked| follow.permissions.iter().any(|(open, ..)| *open == asked.id));
     settle(run, follow);
     run.answer_waits = follow.answered.is_some();
     run.asking = run.state == RunState::NeedsAnswer;
@@ -283,10 +328,6 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         RunState::NeedsAnswer => follow.asked.clone(),
         _ => None,
     };
-    if run.state != before || !rows.rows.is_empty() {
-        run.last_progress_at = now;
-    }
-    rows.rows
 }
 
 /// Ends a turn the harness can no longer say the end of: its agent went with a harness that stopped with no shutdown.
@@ -295,6 +336,7 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
     follow.in_turn = false;
     follow.closed = true;
     follow.permissions.clear();
+    run.permissions.clear();
     follow.calls.clear();
     run.state = RunState::Stopped;
     run.last_detail = Some(AGENT_LOST.into());
@@ -493,12 +535,90 @@ fn tool_kind(name: &str) -> &'static str {
     }
 }
 
-/// A tool and the one field of its input that says what it does: the command, the file, the pattern or the address.
+/// The fields of a tool's input that say what it does: the command, the file, the pattern or the address.
+const SAYS_WHAT: [&str; 6] = ["command", "file_path", "path", "pattern", "url", "query"];
+
+/// A tool and the one field of its input that says what it does, cut to a line.
 fn describe(name: &str, input: &Value) -> String {
-    let field = ["command", "file_path", "path", "pattern", "url", "query"].iter().find_map(|key| input.get(*key).and_then(Value::as_str));
+    let field = SAYS_WHAT.iter().find_map(|key| input.get(*key).and_then(Value::as_str));
     match field.and_then(|f| f.lines().next()).map(|f| cut(f.trim(), 200)) {
         Some(what) if !what.is_empty() => format!("{name}: {what}"),
         _ => name.to_owned(),
+    }
+}
+
+/// A permission request as the run keeps it. A kind this build does not know is still a request, one the person can
+/// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
+fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
+    let masked = holds_mask(&input);
+    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input);
+    PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
+}
+
+/// Whether the input holds a field beside the one `subject` shows.
+fn holds_more(input: &Value) -> bool {
+    let shown = SAYS_WHAT.iter().find(|key| input.get(**key).and_then(Value::as_str).is_some());
+    match (input.as_object(), shown) {
+        (Some(fields), Some(shown)) => fields.keys().any(|key| key != shown),
+        _ => false,
+    }
+}
+
+/// Whether the page reads every number of it as the value an allow sends: JavaScript holds an integer exactly only
+/// within ±(2^53 − 1). A float here is already an `f64`, which goes to the page and back to the agent as the same one.
+pub(super) fn shows_exactly(value: &Value) -> bool {
+    const SAFE: u64 = (1 << 53) - 1;
+    match value {
+        Value::Number(n) => n.as_u64().is_none_or(|n| n <= SAFE) && n.as_i64().is_none_or(|n| n.unsigned_abs() <= SAFE),
+        Value::Array(items) => items.iter().all(shows_exactly),
+        Value::Object(fields) => fields.values().all(shows_exactly),
+        _ => true,
+    }
+}
+
+/// Whether the harness masked any part of it, in a value or a key.
+fn holds_mask(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains(harness::redact::MASK),
+        Value::Array(items) => items.iter().any(holds_mask),
+        Value::Object(fields) => fields.iter().any(|(key, value)| key.contains(harness::redact::MASK) || holds_mask(value)),
+        _ => false,
+    }
+}
+
+/// A request in a line for the run, the timeline, Needs you and Pip, saying when it holds less than the request: more
+/// lines, a line cut, the harness's cut, or more in it than that one field.
+fn summary(name: &str, input: &Value, cut_by_harness: bool) -> String {
+    let field = SAYS_WHAT.iter().find_map(|key| input.get(*key).and_then(Value::as_str)).map(str::trim).filter(|f| !f.is_empty());
+    let less = |line: String, lines: usize, cut_line: bool| {
+        if lines > 1 {
+            format!("{line} … ({lines} lines)")
+        } else if cut_line || cut_by_harness {
+            format!("{line} … (cut)")
+        } else if holds_more(input) {
+            format!("{line} … (and more)")
+        } else {
+            line
+        }
+    };
+    match field {
+        Some(field) => {
+            let first = field.lines().next().unwrap_or_default().trim();
+            let shown = cut(first, 200);
+            less(format!("{name}: {shown}"), field.lines().count(), shown.len() < first.len())
+        }
+        None if cut_by_harness || input.is_null() || input.as_object().is_some_and(|fields| fields.is_empty()) => less(name.to_owned(), 1, false),
+        None => format!("{name} … (and more)"),
+    }
+}
+
+/// The whole of what a permission request asks for: the field that says it, else its whole input. The input of one the
+/// harness cut is text.
+fn subject(input: &Value) -> String {
+    match SAYS_WHAT.iter().find_map(|key| input.get(*key).and_then(Value::as_str)) {
+        Some(field) => field.to_owned(),
+        None if input.is_null() => String::new(),
+        None => plain(input),
     }
 }
 

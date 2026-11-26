@@ -521,6 +521,26 @@ export interface RunSpec {
   workstream?: string | null;
 }
 
+/** What a permission request asks for, as the harness names it. `other`: a kind this build can't read. */
+export type PermissionKind = "command" | "file_change" | "permissions" | "tool" | "other";
+
+/** A permission request of a run on the harness, as the harness sent it: masked there, never cut. An allow allows all of `input`, so offer Allow only where every field of `input` is on screen. */
+export interface PermissionRequest {
+  /** The harness's id, which an answer names. */
+  id: string;
+  kind: PermissionKind;
+  /** The tool's name: `Bash`, `Edit`, an MCP tool. */
+  tool: string;
+  /** A heading for it: the whole command, path, pattern, address or query it asks for, else its whole input as JSON. It is not the request: an allow allows all of `input`. */
+  subject: string;
+  /** The whole request, masked as the harness sent it; text where the harness cut it. The page must show all of it. */
+  input: unknown;
+  /** The harness masked part of it as a secret (`<redacted>` in place of each), so you can't see all of what an allow runs. */
+  masked?: boolean;
+  /** It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, Gossamr no longer has it whole, or it holds an integer JavaScript can't hold exactly (beyond ±(2^53 − 1)). */
+  denyOnly?: boolean;
+}
+
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
 
 /**
@@ -559,6 +579,8 @@ export interface Run {
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
+  /** Its agent's permission requests that are still open, oldest first. Each is answered once, with `runsAnswerPermission`. */
+  permissions?: PermissionRequest[];
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;

@@ -611,6 +611,34 @@ pub struct Run {
     /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// Its agent's permission requests that are still open, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PermissionRequest>,
+}
+
+/// A permission request of a run on the harness, as the harness sent it: masked there, never cut here. An allow allows
+/// all of `input`, so a caller may offer Allow only where every field of `input` is on screen.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    /// The harness's id, which an answer names.
+    pub id: String,
+    pub kind: harness::event::PermissionKind,
+    /// The tool's name: `Bash`, `Edit`, an MCP tool.
+    pub tool: String,
+    /// A heading for it: the whole command, path, pattern, address or query it asks for, else its whole input as JSON.
+    /// It is not the request: an allow allows all of `input`.
+    pub subject: String,
+    /// The whole request, masked as the harness sent it; text where the harness cut it. The page shows all of it.
+    #[serde(default)]
+    pub input: serde_json::Value,
+    /// The harness masked part of it as a secret, so the person can't see all of what an allow runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub masked: bool,
+    /// It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, Gossamr no longer
+    /// has it whole, or it holds an integer the page can't hold exactly (`consumer::shows_exactly`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deny_only: bool,
 }
 
 impl Run {
@@ -697,6 +725,7 @@ impl Run {
             harness_session: None,
             answer_waits: false,
             handed_over: false,
+            permissions: Vec::new(),
         }
     }
 

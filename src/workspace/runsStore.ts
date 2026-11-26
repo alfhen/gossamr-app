@@ -9,6 +9,8 @@ import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type 
 import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { answerSentText } from "./runSheetLogic";
+import { answeringKey } from "./permissionLogic";
+import { noteAnswer } from "./buttonMoves";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
@@ -41,6 +43,16 @@ export function browseList(snapshot: readonly string[] | null, live: readonly st
   return [...kept, ...live.filter((id) => !had.has(id))];
 }
 
+/** A request in a run's list that the pointer is on. */
+export interface PermissionHover {
+  /** Which list: a run's card or its sheet. */
+  where: "card" | "sheet";
+  runId: string;
+  key: string;
+  index: number;
+  height: number;
+}
+
 interface RunsState {
   backend: Backend | null;
   /** The runs on the Agents view; archived ones are in `archived`, so nothing that counts or lists runs sees them. */
@@ -70,6 +82,26 @@ interface RunsState {
   answering: ReadonlySet<string>;
   /** Runs whose answer was refused because they were handed over to Terminal, until one goes through. */
   handedOverAsked: ReadonlySet<string>;
+  /** Permission requests whose answer is on its way, by `answeringKey`, with what was answered. */
+  permissionAnswering: ReadonlyMap<string, "allow" | "deny">;
+  /** Permission requests answered here, by `answeringKey`: never answered again, while the list still shows them. */
+  permissionAnswered: ReadonlySet<string>;
+  /** Why the last answer to a permission request was refused, by `answeringKey`, until the next answer to it. */
+  permissionRefused: ReadonlyMap<string, string>;
+  /**
+   * Counts every change to the open permission requests anywhere on the page: one answered here, and one that a read
+   * finds added, answered or withdrawn. Every item holds its buttons for a moment after it moves, since a change in one
+   * run's card moves the cards below it.
+   */
+  permissionEpoch: number;
+  /** What was answered here, by `answeringKey`, for the line an answered request leaves while the pointer is on it. */
+  permissionDecided: ReadonlyMap<string, "allow" | "deny">;
+  /**
+   * The request in a run's list the pointer is on: its place and height. When it closes (answered or withdrawn) the list
+   * keeps that place until the pointer leaves, so nothing moves under it.
+   */
+  permissionHover: PermissionHover | null;
+  hoverPermission(hover: PermissionHover | null): void;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -99,6 +131,8 @@ interface RunsState {
   setModel(id: string, choice: ModelChoice): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. `tookBack`: you took a run handed over to Terminal back. */
   answer(id: string, text: string, options?: { tookBack?: boolean }): Promise<boolean>;
+  /** Allows or denies one open permission request of a run, once: a second answer while one is on its way does nothing. */
+  answerPermission(id: string, request: string, decision: "allow" | "deny"): Promise<boolean>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
   /** With `trust`, Gossamr first trusts the run's own clone for its login; a refusal is kept for the run's card. */
@@ -148,6 +182,9 @@ const liveOrder = (s: Pick<RunsState, "runs" | "filters">) => agentGroups(s.runs
 
 /** A run that was dismissed and has moved on (it retried, was resumed, carried on) starts over: if it fails or stops again, Needs you has it again. */
 const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
+
+/** Every open permission request on the page, in order, to tell when one was added, answered or withdrawn. */
+const openRequestIds = (runs: readonly Run[]) => runs.flatMap((run) => (run.permissions ?? []).map((p) => answeringKey(run.id, p.id))).join("\n");
 
 function forgetRecovered(dismissed: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
   const recovered = runs.filter((r) => !DISMISSABLE.includes(r.state) && dismissed.has(r.id));
@@ -200,6 +237,8 @@ function offerRestore(get: () => RunsState, ids: readonly string[], text: string
 
 let stop: (() => void) | null = null;
 let seq = 0;
+/** Counts the store's lives (each `init` and `dispose`), so an answer settles only into the life it was sent in. */
+let life = 0;
 
 export const useRuns = create<RunsState>((set, get) => ({
   backend: null,
@@ -213,6 +252,16 @@ export const useRuns = create<RunsState>((set, get) => ({
   drafting: null,
   answering: new Set<string>(),
   handedOverAsked: new Set<string>(),
+  permissionAnswering: new Map(),
+  permissionAnswered: new Set<string>(),
+  permissionRefused: new Map(),
+  permissionEpoch: 0,
+  permissionDecided: new Map(),
+  permissionHover: null,
+
+  hoverPermission(hover) {
+    set({ permissionHover: hover });
+  },
   answered: {},
   ...idle,
 
@@ -229,7 +278,10 @@ export const useRuns = create<RunsState>((set, get) => ({
     stop?.();
     stop = null;
     seq++;
-    set({ backend: null, ...idle });
+    life++;
+    // An answer still on its way belongs to the backend being left: its mark goes with it, or the request could not be
+    // answered again on a return there.
+    set({ backend: null, ...idle, permissionAnswering: new Map(), permissionRefused: new Map(), permissionHover: null });
   },
 
   async reload() {
@@ -245,7 +297,8 @@ export const useRuns = create<RunsState>((set, get) => ({
       clearTimeout(watchdog);
       if (mine === seq) {
         const runs = all.filter((r) => !r.archivedAt);
-        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs) });
+        const moved = openRequestIds(runs) !== openRequestIds(get().runs);
+        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs), ...(moved ? { permissionEpoch: get().permissionEpoch + 1 } : {}) });
         forgetSettledAnswers(runs);
         announceFailedLaunches(get, set);
       }
@@ -342,6 +395,40 @@ export const useRuns = create<RunsState>((set, get) => ({
     } finally {
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
       void get().reload();
+    }
+  },
+
+  async answerPermission(id, request, decision) {
+    const { backend, permissionAnswering, permissionAnswered } = get();
+    const key = answeringKey(id, request);
+    if (!backend || permissionAnswering.has(key) || permissionAnswered.has(key)) return false;
+    // Every Allow after this one needs a fresh aim, wherever it is on the page.
+    noteAnswer();
+    const refused = new Map(get().permissionRefused);
+    refused.delete(key);
+    set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]), permissionRefused: refused });
+    // An answer that settles after the store moved to another backend belongs to the old one, and touches nothing now.
+    const mine = life;
+    const same = () => life === mine && get().backend === backend;
+    try {
+      await backend.runsAnswerPermission(id, request, decision);
+      if (!same()) return true;
+      // Request ids are the harness's and never come back, so the key stays: the item is gone by the next read.
+      set({ permissionAnswered: new Set([...get().permissionAnswered, key]), permissionDecided: new Map([...get().permissionDecided, [key, decision]]), permissionEpoch: get().permissionEpoch + 1 });
+      return true;
+    } catch (e) {
+      if (!same()) return false;
+      // The item keeps the reason until the next answer: a toast alone goes away.
+      set({ permissionRefused: new Map([...get().permissionRefused, [key, messageOf(e)]]) });
+      useToasts.getState().push(`Couldn't ${decision} it: ${messageOf(e)}`);
+      return false;
+    } finally {
+      if (same()) {
+        const left = new Map(get().permissionAnswering);
+        left.delete(key);
+        set({ permissionAnswering: left });
+        void get().reload();
+      }
     }
   },
 

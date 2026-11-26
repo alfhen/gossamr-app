@@ -166,6 +166,12 @@ export interface Backend {
    * `HANDED_OVER_ASK`.
    */
   runsAnswer(id: string, text: string, options?: { tookBack?: boolean }): Promise<Run>;
+  /**
+   * Allows or denies one open permission request of a run on the harness, once, and for that request alone. Rejects, in
+   * the app's words, an answer to a request that is not open on the run (answered, withdrawn, or another run's), to a run
+   * that is stopped or handed over, and an allow of a request that is `denyOnly`.
+   */
+  runsAnswerPermission(id: string, request: string, decision: "allow" | "deny"): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */
