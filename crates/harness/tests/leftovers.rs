@@ -393,8 +393,7 @@ fn leftover_whose_leader_is_gone_and_whose_group_cannot_be_read_stays_given_up_a
     assert!(process::alive(&work), "a listing that proves nothing signals nothing");
     assert_eq!(process::seam::sent_to(leader.pid), Vec::<i32>::new());
     assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
-    // SAFETY: the sleep's own pid, read while it runs.
-    unsafe { libc::kill(work.pid as libc::pid_t, libc::SIGKILL) };
+    kill(&work);
 }
 
 #[test]

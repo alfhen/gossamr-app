@@ -1588,7 +1588,8 @@ async fn shutdown_stops_waiting_for_an_agent_that_ignores_stop_and_kill_and_free
     let (gone, _) = open(&harness, false).await;
     let left = tokio::time::timeout(Duration::from_secs(30), harness.shutdown()).await.expect("shutdown does not wait for ever");
     assert_eq!(left, std::slice::from_ref(&stuck), "it names the session it gave up on");
-    let store = Store::open(&dir).expect("the data folder is free");
+    // Free once a child another test's thread is starting has exec'd: until then it holds a copy of the lock.
+    let store = reopen(&dir).await;
     let last = store.events(&stuck, 0).unwrap().pop().unwrap();
     assert!(matches!(&last.body, Body::Failed { kind: FailKind::Stuck, reason } if reason.contains("shut down")), "{last:?}");
     assert!(matches!(store.events(&gone, 0).unwrap().pop().unwrap().body, Body::Closed { .. }), "the others closed");
