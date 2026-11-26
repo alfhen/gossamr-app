@@ -3,6 +3,8 @@ import { advanceRuns, agentsHome, expandNeedsYou, expectToast, mockAnswerTries, 
 
 /** Said when an answer goes to a run handed over to Terminal; `HANDED_OVER_ASK` in src/types.ts. */
 const HANDED_OVER = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
+/** Why Clean up leaves a run Terminal works in; `HANDED_OVER_CLEANUP` in src/types.ts. */
+const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
 
 const card = (page: Page, key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
 const runOf = async (page: Page, key: string) => (await mockRuns(page)).find((r) => r.key === key)!;
@@ -83,6 +85,16 @@ test("a refused clean-up shows its reason in its own words and removes nothing",
   await sheet.getByRole("group", { name: "Clean up this run" }).getByRole("button", { name: "Yes, remove it" }).click();
   await expect(sheet.getByRole("alert")).toHaveText(/kept it: The worktree has unpushed commits\. Push them or discard them yourself, then try again\.$/);
   await expect(sheet).not.toContainText("The worktree and its branch were removed.");
+});
+
+test("Clean up finished runs takes runs on the harness, and leaves the one Terminal works in, saying why", async ({ page }) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agent settings");
+  await page.keyboard.press("Enter");
+  const settings = page.getByRole("dialog", { name: "Agent settings" });
+  await settings.getByRole("button", { name: /^Clean up finished runs \(\d+\)$/ }).click();
+  await expectToast(page, `Couldn't clean it up: ${HANDED_OVER_CLEANUP}`);
+  await expect(settings.getByRole("status")).toHaveText(/^Removed \d+ worktrees\. 1 kept: The worktree has unpushed commits\./);
 });
 
 test("a run handed over to Terminal says so on its card, why in Needs you, and sends the answer once, only on I took it back", async ({ page }) => {

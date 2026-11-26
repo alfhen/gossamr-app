@@ -858,3 +858,36 @@ fn leftover_sent_its_kill_waits_for_a_process_that_refuses_signals_as_one_that_m
     let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
     assert!(listed.contains("it was sent a kill and had not ended when last checked"), "waited for it, and kept: {listed}");
 }
+
+#[tokio::test]
+async fn leftover_kept_is_not_handed_over_and_each_call_says_what_keeps_it() {
+    let (_tmp, dir) = data_dir();
+    left_by_a_shutdown(&dir, None);
+    let harness = started_harness(&dir);
+    let keeps = "session s's agent may still run (a shutdown stopped waiting for it)";
+    let refused = harness.hand_over("s").err().map(|e| e.to_string()).unwrap_or_default();
+    // With no record to check, nothing frees it (m17): each refusal says so.
+    assert!(refused.contains(keeps) && refused.ends_with("so it is never handed over: open a new session for its work"), "{refused}");
+    for (refused, what) in [(harness.resume("s").await.err(), "resumed"), (harness.clean_up("s").await.err(), "cleaned up")] {
+        let refused = refused.map(|e| e.to_string()).unwrap_or_default();
+        assert!(refused.contains(keeps) && refused.contains(&format!("so it is never {what}")), "{refused}");
+    }
+    drop(harness);
+    assert!(!opened(&dir).session("s").unwrap().handed_over && !said(&dir).contains(&Body::HandedOver), "not marked handed over");
+}
+
+#[tokio::test]
+async fn leftover_kept_after_a_hand_over_is_not_taken_back_or_cleaned_up_and_says_what_keeps_it() {
+    // Terminal may work in it, and so may the agent the shutdown left: neither call goes ahead, and each says why.
+    let (_tmp, dir) = data_dir();
+    left_by_a_shutdown(&dir, None);
+    opened(&dir).set_handed_over("s", true).unwrap();
+    let harness = started_harness(&dir);
+    let keeps = "session s's agent may still run (a shutdown stopped waiting for it)";
+    for (refused, what) in [(harness.take_back("s").await.err(), "taken back"), (harness.clean_up("s").await.err(), "cleaned up")] {
+        let refused = refused.map(|e| e.to_string()).unwrap_or_default();
+        assert!(refused.contains(keeps) && refused.contains(&format!("so it is never {what}")), "{refused}");
+    }
+    drop(harness);
+    assert!(opened(&dir).session("s").unwrap().handed_over, "still handed over");
+}

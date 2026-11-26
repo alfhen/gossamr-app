@@ -410,6 +410,25 @@ fn a_tool_calls_detail_on_the_run_is_redacted_as_its_row_is() {
 }
 
 #[test]
+fn a_commit_the_signing_agent_refused_ends_the_turn_with_signing_needs_you_and_a_later_turn_clears_it() {
+    let mut p = Played::new();
+    p.play(started());
+    let refused = "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object";
+    p.play([
+        Body::ToolCall { id: "t1".into(), name: "Bash".into(), input: json!({ "command": "git commit -m fix" }) },
+        Body::ToolResult { id: "t1".into(), output: json!(refused), error: true },
+        Body::Text { text: "I couldn't commit; signing failed.".into() },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!((p.run.state, p.run.failure.clone(), p.run.error.as_deref()), (RunState::Failed, Some(RunFailure::SigningNeedsYou), Some(SIGNING_NEEDS_YOU)));
+    p.play([Body::Prompted { text: "Unlocked, try again.".into() }, Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!((p.run.state, p.run.failure.clone()), (RunState::Done, None), "a turn that commits clears it");
+    let mut other = Played::new();
+    other.play(started());
+    other.play([Body::ToolResult { id: "t1".into(), output: json!("fatal: not a git repository"), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(other.run.state, RunState::Done, "any other failed command is not this");
+}
+
 fn a_lost_agent_keeps_the_question_it_asked_for_you_to_answer() {
     let mut p = Played::new();
     p.play(started()).play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
@@ -426,4 +445,123 @@ fn a_stop_that_finds_the_agent_lost_ends_the_run_and_its_question() {
     agent_lost(&mut p.run, &mut p.follow, Utc::now());
     assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::Stopped, None, false));
     assert!(p.follow.ended && p.follow.question.is_none(), "nothing more is followed or answered");
+}
+
+const REFUSED: &str = "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object";
+
+fn bash(id: &str, command: &str) -> Body {
+    Body::ToolCall { id: id.into(), name: "Bash".into(), input: json!({ "command": command }) }
+}
+
+#[test]
+fn only_a_failed_git_commit_call_marks_a_refused_signature_never_text_the_agent_reads() {
+    let refused_by = |call: Body, error: bool| {
+        let mut p = Played::new();
+        p.play(started()).play([call, Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error }, Body::TurnEnded { how: TurnEnd::Done }]);
+        p.run.state
+    };
+    assert_eq!(refused_by(bash("t1", "git -C repo -c commit.gpgsign=true commit -m fix"), true), RunState::Failed, "git's options before commit");
+    assert_eq!(refused_by(bash("t1", "cargo test && git commit -am fix"), true), RunState::Failed, "a commit after another command");
+    assert_eq!(refused_by(bash("t1", "cat notes.md"), false), RunState::Done, "a file that quotes git's error");
+    assert_eq!(refused_by(bash("t1", "git commit -m fix"), false), RunState::Done, "a result that is no error");
+    assert_eq!(refused_by(bash("t1", "grep -r 'failed to write commit object' ."), true), RunState::Done, "a search for the words");
+    assert_eq!(refused_by(Body::ToolCall { id: "t1".into(), name: "Read".into(), input: json!({ "file_path": "consumer.rs" }) }, true), RunState::Done, "a file read");
+    // "design" holds "sign": a whole word only.
+    let mut p = Played::new();
+    p.play(started()).play([bash("t1", "git commit -m design"), Body::ToolResult { id: "t1".into(), output: json!("error: design check failed\nfatal: failed to write commit object"), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.state, RunState::Done);
+}
+
+#[test]
+fn a_later_commit_that_works_in_the_same_turn_clears_the_mark() {
+    let mut p = Played::new();
+    p.play(started()).play([
+        bash("t1", "git commit -m fix"),
+        Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true },
+        bash("t2", "git commit -m fix"),
+        Body::ToolResult { id: "t2".into(), output: json!("[main 1a2b3c4] fix"), error: false },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!((p.run.state, p.run.failure), (RunState::Done, None));
+}
+
+#[test]
+fn the_mark_outlasts_a_turn_that_ends_on_a_question_and_fails_the_turn_its_answer_starts() {
+    let mut p = Played::new();
+    p.play(started()).play([
+        bash("t1", "git commit -m fix"),
+        Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true },
+        Body::Question { id: "q1".into(), text: "Shall I push anyway?".into() },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!(p.run.state, RunState::NeedsAnswer);
+    p.play([Body::QuestionClosed { id: "q1".into(), how: QuestionEnd::Answered }, Body::Prompted { text: "No.".into() }, Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!((p.run.state, p.run.failure), (RunState::Failed, Some(RunFailure::SigningNeedsYou)), "the work is still not committed");
+}
+
+#[test]
+fn a_take_back_that_fails_or_closes_again_no_longer_counts_as_starting() {
+    for end in [Body::Failed { kind: FailKind::Provider, reason: "the agent could not open".into() }, Body::Closed { by: ClosedBy::Unknown }] {
+        let mut p = Played::new();
+        p.play(started());
+        p.follow.taken_back = true;
+        p.play([end]);
+        assert!(!p.follow.taken_back);
+    }
+}
+
+#[test]
+fn a_refused_signature_inside_a_quoted_shell_or_from_an_ssh_signer_is_seen() {
+    let refused_by = |command: &str, output: &str| {
+        let mut p = Played::new();
+        p.play(started()).play([bash("t1", command), Body::ToolResult { id: "t1".into(), output: json!(output), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+        p.run.state
+    };
+    assert_eq!(refused_by("bash -c \"git commit -m x\"", REFUSED), RunState::Failed);
+    assert_eq!(refused_by("sh -c 'cd repo && git commit -am x'", REFUSED), RunState::Failed);
+    let ssh = "error: Couldn't load public key /x.pub: No such file or directory?\n\nfatal: failed to write commit object";
+    assert_eq!(refused_by("git commit -m x", ssh), RunState::Failed, "an ssh signer's error");
+}
+
+#[test]
+fn a_signing_refusal_whose_session_then_closed_says_to_ask_pip_since_a_message_cannot_reach_it() {
+    let mut p = Played::new();
+    p.play(started()).play([bash("t1", "git commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.error.as_deref(), Some(SIGNING_NEEDS_YOU));
+    p.play([Body::Closed { by: ClosedBy::Unknown }]);
+    assert_eq!((p.run.state, p.run.failure, p.run.error.as_deref()), (RunState::Failed, Some(RunFailure::SigningNeedsYou), Some(SIGNING_NEEDS_YOU_CLOSED)));
+}
+
+#[test]
+fn a_message_dropped_as_the_session_ended_is_said_not_to_have_reached_the_agent() {
+    let mut p = Played::new();
+    p.play(started()).play([Body::Failed { kind: FailKind::Provider, reason: "the provider failed".into() }, Body::PromptsDropped]);
+    assert_eq!(p.run.last_detail.as_deref(), Some(NOT_DELIVERED));
+    assert!(p.rows.iter().any(|row| row.kind == "error" && row.text == NOT_DELIVERED));
+}
+
+#[test]
+fn a_refused_signature_with_a_quoted_folder_before_commit_is_seen() {
+    let mut p = Played::new();
+    p.play(started()).play([bash("t1", "git -C \"/work/a b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.state, RunState::Failed);
+}
+
+#[test]
+fn a_command_that_only_quotes_git_commit_does_not_clear_a_refused_signature() {
+    let mut p = Played::new();
+    p.play(started()).play([
+        bash("t1", "git commit -m fix"),
+        Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true },
+        bash("t2", "echo 'git commit -m fix'"),
+        Body::ToolResult { id: "t2".into(), output: json!("git commit -m fix"), error: false },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!((p.run.state, p.run.failure), (RunState::Failed, Some(RunFailure::SigningNeedsYou)));
+    let mut escaped = Played::new();
+    escaped.play(started()).play([bash("t1", "git -C /work/a\\ b/repo commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(escaped.run.state, RunState::Failed, "an escaped space in the folder");
+    let mut separated = Played::new();
+    separated.play(started()).play([bash("t1", "git -C \"/work/a & b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(separated.run.state, RunState::Failed, "a quoted separator in the folder");
 }

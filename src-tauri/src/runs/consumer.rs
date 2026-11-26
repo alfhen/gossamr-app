@@ -22,6 +22,9 @@ pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
+pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
+pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again if the run starts working again, or ask Pip to start it again.";
+pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
 pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
@@ -38,18 +41,28 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     let at = DateTime::from_timestamp_millis(event.ms).unwrap_or(now);
     let mut rows = Rows { run_id: run.id.clone(), at, rows: Vec::new() };
     let before = run.state;
+    // A take back that failed or closed again did not start: its run is no longer one starting up.
+    if matches!(body, Body::Failed { .. } | Body::Closed { .. }) {
+        follow.taken_back = false;
+    }
     match body {
-        Body::Started { resumed: true, .. } => {
+        Body::Started { resumed: true, provider_session } => {
+            follow.provider_session = Some(provider_session);
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
+            follow.taken_back = false;
+            run.handed_over = false;
             reopen(run);
             if follow.answered.is_some() {
                 run.last_detail = Some(ANSWER_WAITS.into());
             }
             rows.add("follow_up", "Resumed", None);
         }
-        Body::Started { .. } => rows.add("start", "Started", None),
+        Body::Started { provider_session, .. } => {
+            follow.provider_session = Some(provider_session);
+            rows.add("start", "Started", None);
+        }
         Body::Prompted { text } => {
             follow.prompts += 1;
             // The first prompt is the brief the person approved; each later one is a message to the agent.
@@ -64,7 +77,11 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = Some(SLOT_WAIT.into());
             rows.add("update", SLOT_WAIT, None);
         }
-        Body::PromptsDropped => rows.add("update", "Messages it had not read yet were dropped", None),
+        // A message taken while the session was ending never reached the agent: say so where it is read.
+        Body::PromptsDropped => {
+            run.last_detail = Some(NOT_DELIVERED.into());
+            rows.add("error", NOT_DELIVERED, None);
+        }
         Body::TurnStarted => {
             follow.in_turn = true;
             reopen(run);
@@ -76,7 +93,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = first_line(&text);
             rows.add("update", &text, None);
         }
-        Body::ToolCall { name, input, .. } => {
+        Body::ToolCall { id, name, input } => {
+            if runs_git_commit(&input) {
+                follow.commits.push(id);
+            }
             let what = describe(&name, &input);
             run.last_detail = Some(redact(&what));
             rows.add(tool_kind(&name), &what, None);
@@ -87,8 +107,16 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::ToolResult { id, error, output } => {
             follow.calls.retain(|(open, ..)| *open != id);
-            if error {
-                rows.add("error", "A tool call failed", Some(&plain(&output)));
+            let said = plain(&output);
+            let commit = follow.commits.iter().position(|open| *open == id).map(|at| follow.commits.remove(at)).is_some();
+            if commit && error && signing_refused(&said) {
+                follow.signing_refused = true;
+                rows.add("error", "A commit wasn't signed: your signing agent refused it", Some(&said));
+            } else if commit && !error {
+                // Committed after all, signed: the turn's work is safe.
+                follow.signing_refused = false;
+            } else if error {
+                rows.add("error", "A tool call failed", Some(&said));
             }
         }
         Body::Permission { id, kind, tool, input } => {
@@ -158,6 +186,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.turns += 1;
             follow.permissions.clear();
             follow.calls.clear();
+            follow.commits.clear();
             match how {
                 TurnEnd::Done => {
                     follow.carry_ons = 0;
@@ -171,6 +200,13 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 run.state = if how == TurnEnd::Done { RunState::Done } else { RunState::Stopped };
                 run.last_detail = (how == TurnEnd::Denied).then(|| STOPPED_AFTER_DENY.into()).or(run.last_detail.take());
                 run.ended_at = Some(now);
+            }
+            // The turn's work could not be committed, whatever the agent made of it: the person has to act. A turn that
+            // ends on a question keeps the mark for the turn its answer starts.
+            if follow.question.is_none() && std::mem::take(&mut follow.signing_refused) {
+                run.state = RunState::Failed;
+                run.error = Some(SIGNING_NEEDS_YOU.into());
+                run.failure = Some(RunFailure::SigningNeedsYou);
             }
         }
         Body::Failed { kind: FailKind::AgentStopped, .. } if follow.stop_asked => {
@@ -206,6 +242,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // What a turn used is no row of the timeline.
         Body::Usage { .. } => {}
         Body::HandedOver => {
+            run.handed_over = true;
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
         }
@@ -213,6 +250,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // can be resumed, and its question stays until a `question_closed`.
         // Who closed it (`by`) is read in H10c-2.
         Body::Closed { .. } => {
+            // A message can no longer reach it, so the way out its failure names is the one that still works.
+            if run.failure == Some(RunFailure::SigningNeedsYou) {
+                run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());
+            }
             follow.closed = true;
             follow.ended = follow.stop_asked;
             follow.in_turn = false;
@@ -315,6 +356,33 @@ fn drop_answer(run: &mut Run, follow: &mut SessionFollow) {
     if matches!(run.last_detail.as_deref(), Some(ANSWER_WAITS | ANSWER_WAITS_RESUME)) {
         run.last_detail = None;
     }
+}
+
+/// What git says when the signing program refused a commit: it wrote no commit object, and the signer said why.
+fn signing_refused(said: &str) -> bool {
+    let said = said.to_lowercase();
+    // Whole words, so "design" or "assign" is no signer.
+    let mut words = said.split(|c: char| !(c.is_alphanumeric() || c == '-'));
+    said.contains("failed to write commit object") && words.any(|word| ["sign", "signing", "1password", "gpg", "ssh-keygen", "ssh", "key", "agent"].contains(&word))
+}
+
+/// Whether a shell call's command runs `git commit`, past git's own options (`git -C dir -c key=value commit`).
+fn runs_git_commit(input: &Value) -> bool {
+    let Some(command) = input.get("command").and_then(Value::as_str) else { return false };
+    // Split as the shell splits it, so a quoted `-C` folder is one word, and `bash -c "git commit …"` is seen too.
+    super::shell::commands(command).iter().any(|words| {
+        let mut words = words.iter().map(String::as_str).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
+        while let Some(word) = words.next() {
+            match word {
+                "-c" | "-C" => {
+                    words.next();
+                }
+                option if option.starts_with('-') => {}
+                sub => return sub == "commit",
+            }
+        }
+        false
+    })
 }
 
 /// A run its session takes up again, after a failed turn, a stop or a close: no longer over.

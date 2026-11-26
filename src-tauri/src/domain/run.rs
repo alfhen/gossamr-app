@@ -742,6 +742,19 @@ pub struct SessionFollow {
     /// It closed after a stop the app asked for: nothing resumes it, so it is followed no more.
     #[serde(default)]
     pub ended: bool,
+    /// A commit in this turn failed because the person's signing agent refused it, as git reported it.
+    #[serde(default)]
+    pub signing_refused: bool,
+    /// The shell calls of this turn that run `git commit` and have no result yet: only their failure can be a refused
+    /// signature, never text the agent read.
+    #[serde(default)]
+    pub commits: Vec<String>,
+    /// The provider's own id of the session, from its `started`: what a person resumes it by in Terminal.
+    #[serde(default)]
+    pub provider_session: Option<String>,
+    /// The app took the session back from Terminal; it is starting again until its `started` comes.
+    #[serde(default)]
+    pub taken_back: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

@@ -543,7 +543,11 @@ CREATE TABLE run_sessions (
   data TEXT NOT NULL
 ) WITHOUT ROWID;";
 
-const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS, RUN_SESSIONS];
+/// When the app stopped, once, every agent the old `claude --bg` path had running, as Claude's runs moved to the harness.
+/// A row means it is done.
+const HARNESS_MOVE: &str = "CREATE TABLE harness_move (done_at TEXT NOT NULL);";
+
+const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS, RUN_SESSIONS, HARNESS_MOVE];
 
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 

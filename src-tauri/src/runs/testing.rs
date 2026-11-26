@@ -63,6 +63,8 @@ pub struct Scripted {
     pub resume: Resume,
     pub resumes: Vec<ResumeCall>,
     pub stop_fails: bool,
+    /// What a failing `claude stop` says, in place of a plain failure.
+    pub stop_says: Option<String>,
     /// `claude stop` succeeds but the session is still listed as it was.
     pub stop_lingers: bool,
     /// `stop:<id>` and `resume:<id>` in the order they happened.
@@ -105,6 +107,7 @@ impl FakeCli {
             resume: Resume::Wakes,
             resumes: vec![],
             stop_fails: false,
+            stop_says: None,
             stop_lingers: false,
             calls: vec![],
             rm_refusals: vec![],
@@ -247,7 +250,7 @@ impl ClaudeCli for FakeCli {
     async fn stop(&self, id: &ShortId) -> CliResult<()> {
         let mut s = self.0.lock().unwrap();
         if s.stop_fails {
-            return Err(CliError::Failed { code: Some(1), stderr: "couldn't stop".into() });
+            return Err(CliError::Failed { code: Some(1), stderr: s.stop_says.clone().unwrap_or_else(|| "couldn't stop".into()) });
         }
         s.stops.push(id.to_string());
         s.calls.push(format!("stop:{id}"));

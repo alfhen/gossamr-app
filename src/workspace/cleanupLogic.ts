@@ -9,13 +9,18 @@ const DAY = 86_400_000;
 /** How many earlier sessions of the run `claude rm` has not removed yet. */
 export const leftoverSessions = (run: Pick<Run, "earlierSessions">) => (run.earlierSessions ?? []).filter((s) => !s.removed).length;
 
-/** A run that is over, has a session to remove, and still has its worktree or an earlier session that was kept. */
-export const cleanable = (run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions">) => ["done", "failed", "stopped"].includes(run.state) && !!run.shortId && (!run.worktreeRemovedAt || leftoverSessions(run) > 0);
+/**
+ * A run that is over, has a session to remove, and still has its worktree or an earlier session that was kept. A run on
+ * the harness is offered while its worktree is there, handed over or not, as `cleanup::cleanable` in Rust offers it once
+ * Terminal no longer works in it: the page can't see the folder, so Clean up says in its own words what is in the way.
+ */
+export const cleanable = (run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions"> & Partial<Pick<Run, "harnessSession">>) =>
+  ["done", "failed", "stopped"].includes(run.state) && (run.harnessSession ? !run.worktreeRemovedAt : !!run.shortId && (!run.worktreeRemovedAt || leftoverSessions(run) > 0));
 
 const endedAt = (run: Pick<Run, "endedAt" | "lastProgressAt">) => Date.parse(run.endedAt ?? run.lastProgressAt);
 
 /** Why cleaning this run up is worth offering, or null when it is not: its pull request is settled, it is old, or it takes a lot of disk. */
-export function cleanupReason(run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions" | "endedAt" | "lastProgressAt"> & Partial<Pick<Run, "failure">>, now: number, known: { disk: number | null; change: Pick<CodeChange, "state"> | null }): string | null {
+export function cleanupReason(run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions" | "endedAt" | "lastProgressAt"> & Partial<Pick<Run, "failure" | "harnessSession">>, now: number, known: { disk: number | null; change: Pick<CodeChange, "state"> | null }): string | null {
   // Its failure already offers Clean up, so the sheet doesn't offer it twice.
   if (!cleanable(run) || run.failure?.type === "interrupted") return null;
   if (known.change?.state === "merged" || known.change?.state === "closed") return `Its pull request is ${known.change.state}.`;

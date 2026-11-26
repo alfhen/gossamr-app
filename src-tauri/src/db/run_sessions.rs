@@ -14,7 +14,33 @@ pub struct Applied {
     pub follow: SessionFollow,
 }
 
+/// Gives each run its session again where a build that does not know `harnessSession` saved the run without it: the
+/// session's row is still in `run_sessions`, so the run does not read as one that has none.
+pub(super) fn rebind(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT r.id, r.data, s.session FROM runs r JOIN run_sessions s ON s.run_id = r.id")?;
+    let rows: Vec<(String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    for (id, data, session) in rows {
+        // A run that no longer reads stays as it is; it is read as such wherever runs are read.
+        let Ok(mut run) = serde_json::from_str::<Run>(&data) else { continue };
+        if run.harness_session.is_none() {
+            run.harness_session = Some(session);
+            conn.execute("UPDATE runs SET data = ?2 WHERE id = ?1", params![id, serde_json::to_string(&run)?])?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
+    /// Whether the one-time stop of the old path's agents is done.
+    pub fn harness_moved(&self) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT count(*) FROM harness_move", [], |r| r.get::<_, i64>(0))? > 0)
+    }
+
+    pub fn mark_harness_moved(&self) -> Result<()> {
+        self.conn.execute("INSERT INTO harness_move (done_at) VALUES (?1)", [chrono::Utc::now().to_rfc3339()])?;
+        Ok(())
+    }
+
     /// Makes `session` the run's harness session, followed from its first event.
     pub fn bind_run_session(&self, run_id: &str, session: &str) -> Result<()> {
         self.atomically(|db| {
@@ -145,6 +171,26 @@ mod tests {
         assert!(failed.is_err());
         assert_eq!(db.session_run("s1").unwrap().unwrap().1.seq, 0, "nothing of the event landed");
         assert_eq!(db.run("r1").unwrap().unwrap().last_detail, None);
+    }
+
+    #[test]
+    fn a_run_an_older_build_saved_without_its_session_has_it_again_at_the_next_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        {
+            let db = Db::open_app(&path).unwrap();
+            let run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), Utc::now());
+            db.insert_run(&run).unwrap();
+            db.bind_run_session("r1", "s1").unwrap();
+            // An older build reads the run and saves it back, and its `Run` has no `harnessSession`.
+            let mut stored: serde_json::Value = serde_json::from_str(&db.conn.query_row("SELECT data FROM runs WHERE id = 'r1'", [], |r| r.get::<_, String>(0)).unwrap()).unwrap();
+            stored.as_object_mut().unwrap().remove("harnessSession");
+            db.conn.execute("UPDATE runs SET data = ?1 WHERE id = 'r1'", [stored.to_string()]).unwrap();
+            assert_eq!(db.run("r1").unwrap().unwrap().harness_session, None);
+        }
+        let db = Db::open_app(&path).unwrap();
+        assert_eq!(db.run("r1").unwrap().unwrap().harness_session.as_deref(), Some("s1"));
+        assert_eq!(db.session_run("s1").unwrap().map(|(id, _)| id), Some("r1".to_owned()), "and its session's row still names it");
     }
 
     #[test]

@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 
 const DISK_LIMIT: Duration = Duration::from_secs(3);
 const ATTACH_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
-const ATTACH_DIR: &str = "attach";
+pub(super) const ATTACH_DIR: &str = "attach";
 /// Why a run stopped while it waited for a slot.
 pub const NOT_STARTED: &str = "Stopped before it started";
 
@@ -391,6 +391,9 @@ impl RunService {
     /// Opens Terminal in the run's worktree with the backend's attach command for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
         let run = self.load(run_id).await?;
+        if let Some(handed) = self.hand_over_on_harness(&run).await {
+            return handed;
+        }
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.observing_toolchain(&run).await?;
         let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
