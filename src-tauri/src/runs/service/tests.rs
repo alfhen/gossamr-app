@@ -1159,6 +1159,12 @@ mod clones {
             Some("Remove them with `git -C '/w/acme/webshop' config --unset-all commit.gpgsign` and `git -C '/w/acme/webshop' config --unset-all tag.gpgsign`.")
         );
         assert_eq!(crate::runs::service::fresh::clone_settings_way_out("the branch is not fully merged", clone), None, "any other refusal");
+        let quote = std::path::Path::new("/Users/O'Neil/acme/webshop");
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(two, quote).as_deref(),
+            Some("Remove them with `git -C '/Users/O'\\''Neil/acme/webshop' config --unset-all commit.gpgsign` and `git -C '/Users/O'\\''Neil/acme/webshop' config --unset-all tag.gpgsign`."),
+            "a quote in the path is escaped for the shell"
+        );
         let cut = "the clone has settings Gossamr didn't make (a.one, url.*.insteadof, and 2 more), which a fetch would honour";
         assert_eq!(
             crate::runs::service::fresh::clone_settings_way_out(cut, clone).as_deref(),

@@ -539,3 +539,10 @@ fn a_message_dropped_as_the_session_ended_is_said_not_to_have_reached_the_agent(
     assert_eq!(p.run.last_detail.as_deref(), Some(NOT_DELIVERED));
     assert!(p.rows.iter().any(|row| row.kind == "error" && row.text == NOT_DELIVERED));
 }
+
+#[test]
+fn a_refused_signature_with_a_quoted_folder_before_commit_is_seen() {
+    let mut p = Played::new();
+    p.play(started()).play([bash("t1", "git -C \"/work/a b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.state, RunState::Failed);
+}

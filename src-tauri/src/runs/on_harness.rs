@@ -359,6 +359,8 @@ impl RunService {
     /// a run not on the harness; `Some(Ok(Some(why)))` for a refusal.
     pub(super) async fn cleanup_on_harness(&self, run: &Run) -> Option<Result<Option<String>>> {
         let (link, session) = self.on_harness_of(run)?;
+        // As a message holds it for its send: no turn a message starts can be cut by the stop below.
+        let _turn = self.launching.lock().await;
         let closed = |follow: &crate::domain::SessionFollow| follow.closed;
         let open = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if !closed(&follow));
         // Asked before the close: a refusal after it would have stopped the agent for nothing. A run whose branch the app

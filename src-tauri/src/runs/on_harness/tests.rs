@@ -1124,3 +1124,76 @@ async fn the_move_marks_a_run_whose_login_cannot_be_read_interrupted_without_a_s
     assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "nothing could stop it");
     assert!(rig.fx.core.harness_moved().await.unwrap(), "and the move is done");
 }
+
+#[tokio::test]
+async fn clean_up_waits_for_a_message_that_holds_the_launch_lock_before_it_stops_the_agent() {
+    let (_repo, _served, _git, rig) = shared(FINISHES).await;
+    let rig = Arc::new(rig);
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.unwrap();
+    // As a message being sent holds it.
+    let held = rig.svc.launching.clone().lock_owned().await;
+    let cleaning = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.cleanup(&id).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "nothing is stopped while the message holds the lock");
+    drop(held);
+    assert_eq!(cleaning.await.unwrap().unwrap(), crate::runs::cleanup::Cleanup::Removed);
+}
+
+#[tokio::test]
+async fn a_take_back_the_harness_took_whose_follow_failed_leaves_the_run_taken_back_and_followed_at_the_next_connect() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.unwrap();
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    link.call(Op::HandOver { session: session.clone() }).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    link.fail_follows(1);
+    assert!(link.take_back(&session).await.is_err(), "the follow failed");
+    let after = rig.get(&run).await;
+    assert!(!after.handed_over, "the harness took it back, so the app reads it so");
+    assert!(rig.fx.core.followed_sessions().await.unwrap().iter().any(|(followed, _)| *followed == session), "and a connect follows it again");
+}
+
+const ONE_TURN: &str = r#"{"prompt": null}
+{"say": "First."}
+{"end": "done"}"#;
+
+#[tokio::test]
+async fn a_take_back_whose_session_ends_before_the_call_returns_is_not_left_starting() {
+    let served = Served::new(ONE_TURN, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.unwrap();
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    // The agent ends after its one turn; handed over closed, then taken back, it ends again at once.
+    let mut applied = link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    link.call(Op::HandOver { session: session.clone() }).await.unwrap();
+    link.take_back(&session).await.unwrap();
+    let ended = tokio::time::timeout(WAIT, async {
+        loop {
+            let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+            if follow.closed {
+                return follow;
+            }
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("its new start ended");
+    assert!(!ended.taken_back, "the mark set before the call is cleared by the end the call's watch applied");
+}

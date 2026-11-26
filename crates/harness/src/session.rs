@@ -524,7 +524,13 @@ impl Harness {
                     if let Some(why) = self.why_not_resumable(store, id, &row, &live)? {
                         return Err(Error::Refused(format!("session {id} is not handed over, since Terminal could not resume it: {why}")));
                     }
+                    // Its clean-up may be removing the worktree Terminal would resume in.
+                    if self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner()).contains(id) {
+                        return Err(Error::Refused(format!("session {id} is being cleaned up, so it is not handed over")));
+                    }
                     if !row.handed_over {
+                        // As a hand-over of a running session does: Terminal answers in its own turn, not this one.
+                        store.close_questions(id, QuestionEnd::HandedOver, now_ms())?;
                         store.set_handed_over(id, true)?;
                         store.append(id, &Body::HandedOver, now_ms())?;
                     }
@@ -676,8 +682,16 @@ impl Harness {
                 return Err(given_up(id, "cleaned up"));
             }
             // Terminal works in it now, whoever asks, unless nothing could resume it there or here.
-            if row.handed_over && self.inner.with_store(|store| self.why_not_resumable(store, id, &row, &live))?.is_none() {
-                return Err(Error::HandedOver(id.to_owned()));
+            // A provider this harness lacks a driver for can still run in Terminal, so that alone keeps the mark's guard.
+            let blocked = self.inner.with_store(|store| self.why_not_resumable(store, id, &row, &live))?;
+            match (row.handed_over, blocked) {
+                (true, None) => return Err(Error::HandedOver(id.to_owned())),
+                (true, Some(Error::NoSuchProvider(provider))) => {
+                    return Err(Error::Refused(format!(
+                        "session {id} was handed over to Terminal, and this harness has no {provider} right now, so it can't take it back: Terminal may still work in it, so it is not cleaned up. Take it back once the harness has {provider} again, or remove its worktree yourself"
+                    )));
+                }
+                _ => {}
             }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
@@ -2457,6 +2471,62 @@ mod tests {
         assert!(seen.load(Ordering::Relaxed), "the session published its `started` before `open` returned");
         let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
         assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
+    }
+
+    /// A mock session opened, sent nothing, closed, and no longer live: as a session a stop or a shutdown left.
+    async fn closed_session(harness: &Harness) -> String {
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        harness.close(&id).unwrap();
+        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
+        while harness.inner.live().contains_key(&id) {
+            tokio::task::yield_now().await;
+        }
+        id
+    }
+
+    fn mock_harness(dir: &std::path::Path, script: &str) -> Harness {
+        let mock = Mock::new(Script::parse(script).unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        Harness::new(Store::open(dir).unwrap(), drivers, Settings::default())
+    }
+
+    #[tokio::test]
+    async fn hand_over_of_a_closed_session_its_clean_up_is_removing_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let harness = mock_harness(&tmp.path().join("data"), "{\"prompt\": null}");
+        let id = closed_session(&harness).await;
+        harness.inner.cleaning.lock().unwrap().insert(id.clone());
+        let refused = harness.hand_over(&id).unwrap_err().to_string();
+        assert!(refused.contains("being cleaned up"), "{refused}");
+        assert!(!harness.inner.with_store(|store| store.session(&id)).unwrap().handed_over);
+    }
+
+    #[tokio::test]
+    async fn hand_over_of_a_closed_session_closes_the_question_it_left_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let harness = mock_harness(&tmp.path().join("data"), "{\"prompt\": null}");
+        let id = closed_session(&harness).await;
+        // As a shutdown leaves it: the question open in the store.
+        harness.inner.with_store(|store| store.ask(&id, "q1", now_ms())).unwrap();
+        harness.hand_over(&id).unwrap();
+        assert_eq!(harness.inner.with_store(|store| store.open_question(&id)).unwrap(), None);
+        let events = harness.events(&id, 0).unwrap();
+        assert!(events.iter().any(|event| event.body == Body::QuestionClosed { id: "q1".into(), how: QuestionEnd::HandedOver }), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn clean_up_keeps_a_handed_over_session_whose_provider_this_harness_has_no_driver_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        let harness = mock_harness(&dir, "{\"prompt\": null}");
+        let id = closed_session(&harness).await;
+        harness.hand_over(&id).unwrap();
+        harness.shutdown().await;
+        drop(harness);
+        // Started again with no driver for the session's provider: Terminal may still run it.
+        let without = Harness::new(Store::open(&dir).unwrap(), Vec::new(), Settings::default());
+        let refused = without.clean_up(&id).await.unwrap_err().to_string();
+        assert!(refused.contains("has no mock right now") && refused.contains("not cleaned up"), "{refused}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

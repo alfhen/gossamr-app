@@ -368,8 +368,9 @@ fn signing_refused(said: &str) -> bool {
 fn runs_git_commit(input: &Value) -> bool {
     let Some(command) = input.get("command").and_then(Value::as_str) else { return false };
     command.split(['\n', ';', '&', '|']).any(|part| {
-        // Quotes off, so `bash -c "git commit …"` and `sh -c 'git commit …'` are seen too.
-        let mut words = part.split_whitespace().map(|word| word.trim_matches(['"', '\''])).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
+        // Quote-aware words, so a quoted `-C` folder is one word, and `bash -c "git commit …"` is seen too.
+        let quoted = super::shell::words(part);
+        let mut words = quoted.iter().map(String::as_str).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
         while let Some(word) = words.next() {
             match word {
                 "-c" | "-C" => {

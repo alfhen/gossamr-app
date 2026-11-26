@@ -142,7 +142,7 @@ pub(crate) fn clone_settings_way_out(why: &str, clone: &std::path::Path) -> Opti
     };
     let keys: Vec<&str> = listed.split(", ").map(str::trim).filter(|key| !key.is_empty()).collect();
     let (hidden, plain): (Vec<&str>, Vec<&str>) = keys.iter().partition(|key| key.contains('*'));
-    let at = format!("git -C '{}' config", clone.display());
+    let at = format!("git -C {} config", crate::runs::shell::quote(&clone.display().to_string()));
     let mut parts = Vec::new();
     if !plain.is_empty() {
         // `--unset-all`: a setting such as `credential.helper` can have several values, which `--unset` refuses.
