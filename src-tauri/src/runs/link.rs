@@ -415,9 +415,16 @@ async fn asked_up_to(client: &mut Client, session: &str, upto: u64, ids: &[&str]
     let (mut asked, mut after) = (Vec::new(), 0);
     loop {
         let page = client.call(Op::Events { session: session.to_owned(), after }).await.ok()?;
-        let events: Vec<Event> = serde_json::from_value(page["events"].clone()).ok()?;
-        after = events.last().map_or(after, |e| e.seq);
-        asked.extend(events.into_iter().filter(|e| e.seq <= upto && matches!(&e.body, Body::Permission { id, .. } if ids.contains(&id.as_str()))));
+        let events = page["events"].as_array().cloned().unwrap_or_default();
+        after = events.last().and_then(|e| e["seq"].as_u64()).unwrap_or(after);
+        // One event of a type this build can't read is passed over, as the watch does.
+        let read = events.into_iter().filter_map(|e| serde_json::from_value::<Event>(e).ok());
+        let wanted = |body: &Body| match body {
+            Body::Permission { id, .. } => ids.contains(&id.as_str()),
+            Body::Withheld { of, kept } => of == "permission" && kept.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(&id)),
+            _ => false,
+        };
+        asked.extend(read.filter(|e| e.seq <= upto && wanted(&e.body)));
         if page["more"] != true || after >= upto || after == 0 {
             return Some(asked);
         }

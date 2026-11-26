@@ -235,7 +235,9 @@ impl RunService {
             return refuse(&format!("This run is {}, so it has no request to answer.", run.state.as_str()));
         }
         let Some(open) = run.permissions.iter().find(|open| open.id == request) else { return refuse(super::link::NOT_OPEN) };
-        if open.deny_only && decision == Decision::Allow {
+        // The command is the gate: the flag is what the page reads, and a masked request or one with no whole input
+        // is refused whatever it says.
+        if (open.deny_only || open.masked || !open.input.is_object()) && decision == Decision::Allow {
             // The input of a request the harness cut is text.
             let why = if open.masked {
                 ONLY_DENY_MASKED

@@ -260,7 +260,11 @@ pub fn recover_permissions(run: &mut Run, follow: &SessionFollow, asked: &[Event
             _ => None,
         });
         run.permissions.push(match read {
-            Some((kind, tool, input, cut)) => PermissionRequest { deny_only: *deny_only, ..request(id.clone(), kind, tool, input, cut) },
+            // The follow's flag is an older build's, which knew fewer reasons: either one denies.
+            Some((kind, tool, input, cut)) => {
+                let read = request(id.clone(), kind, tool, input, cut);
+                PermissionRequest { deny_only: *deny_only || read.deny_only, ..read }
+            }
             None => {
                 let masked = need.contains(harness::redact::MASK) || need.contains(super::redact::MASK);
                 PermissionRequest { id: id.clone(), kind: PermissionKind::Other, tool: String::new(), subject: need.clone(), input: Value::Null, masked, deny_only: true }
@@ -474,10 +478,10 @@ fn describe(name: &str, input: &Value) -> String {
 }
 
 /// A permission request as the run keeps it. A kind this build does not know is still a request, one the person can
-/// only deny, as is one cut or masked.
+/// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
 fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
     let masked = holds_mask(&input);
-    let deny_only = cut || masked || kind == PermissionKind::Other;
+    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object();
     PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
 }
 
