@@ -164,6 +164,9 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
                     }
                     let ok = if shutdown { json!({ "left": fake.left }) } else { json!([]) };
                     if shutdown {
+                        let why = call["no_carry_on"].as_str().map_or("plain".to_owned(), |why| why.replace(' ', "_"));
+                        // A log of its own, so the lives' log keeps its order.
+                        note_to(&fake.log.with_file_name("shutdowns.log"), &format!("shutdown-{why}"));
                         let _ = std::fs::remove_file(dir.join(SOCKET));
                         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
                     }
@@ -643,6 +646,19 @@ async fn stop_stops_the_harness_through_shutdown_and_it_stays_stopped_until_aske
     assert_eq!(bed.pids("serving").len(), 1);
     assert_eq!(sidecar.act(Action::Start).await.state, State::Running);
     assert_eq!(bed.pids("serving").len(), 2);
+    bed.none_left().await;
+}
+
+#[tokio::test]
+async fn stop_tells_the_harness_that_no_session_it_stops_may_carry_on_and_a_restart_does_not() {
+    let bed = Bed::new();
+    let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    assert_eq!(sidecar.act(Action::Restart).await.state, State::Running);
+    assert_eq!(sidecar.act(Action::Stop).await.state, State::Stopped);
+    let log = std::fs::read_to_string(bed.root.join("shutdowns.log")).unwrap();
+    let said: Vec<&str> = log.lines().map(|line| line.split(' ').next().unwrap()).collect();
+    assert_eq!(said, ["shutdown-plain".to_owned(), format!("shutdown-{}", STOPPED_EVERY_AGENT.replace(' ', "_"))]);
     bed.none_left().await;
 }
 

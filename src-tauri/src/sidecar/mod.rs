@@ -32,6 +32,9 @@ pub const TOKEN_ACCOUNT: &str = "harness";
 const APP_LOCK: &str = "app.lock";
 const LOG: &str = "harness.log";
 
+/// Why a run Stop cut is not carried on: you stopped it, so it goes on only when you message it.
+pub const STOPPED_EVERY_AGENT: &str = "you stopped every agent";
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// For one connection and its proof.
@@ -283,8 +286,8 @@ impl Sidecar {
         let lock = self.app_lock().await?;
         let token = self.token(inner)?;
         let result = match action {
-            Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, Some(left_message("Stopped.", &left)))),
-            Some(Action::Restart) => match self.stop(&token).await {
+            Some(Action::Stop) => self.stop(&token, Some(STOPPED_EVERY_AGENT)).await.map(|left| Status::new(State::Stopped, Some(left_message("Stopped.", &left)))),
+            Some(Action::Restart) => match self.stop(&token, None).await {
                 Ok(left) => restarted(self.start_or_adopt(&token, &socket).await, &left),
                 Err(e) => Err(e),
             },
@@ -396,9 +399,10 @@ impl Sidecar {
                         if failures >= 3 {
                             return Err(format!("The harness stopped as it started: {}", self.last_log_line()));
                         }
-                        let child = spawn(&self.program, &self.dir, token).map_err(|e| format!("Gossamr couldn't start the harness at {}: {e}", self.program.display()))?;
-                        // Counted before it can answer, so the carry on that waits for an answer covers this start.
+                        // Counted before it can answer, so the carry on that waits for an answer covers this start. A spawn
+                        // that fails counts too, and its pass only waits for a harness that answers.
                         self.starts.send_modify(|n| *n += 1);
+                        let child = spawn(&self.program, &self.dir, token).map_err(|e| format!("Gossamr couldn't start the harness at {}: {e}", self.program.display()))?;
                         started = Some(child);
                     }
                     let child = started.as_mut().expect("a child was just started");
@@ -437,7 +441,8 @@ impl Sidecar {
     }
 
     /// Tells a harness of this app's token to stop every session and itself, and waits until the data folder is free.
-    async fn stop(&self, token: &Token) -> Result<Vec<String>, String> {
+    /// With `no_carry_on`, no session it stops is carried on after the next start; a message still resumes it.
+    async fn stop(&self, token: &Token, no_carry_on: Option<&str>) -> Result<Vec<String>, String> {
         let mut client = match Client::connect_any_protocol(&self.dir, token, self.limits.prove_within).await {
             Ok(client) => client,
             // One that is stopping has taken its socket away and still holds the folder: wait for it below.
@@ -446,7 +451,7 @@ impl Sidecar {
             Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
         let stopping = || "The harness is still stopping. Try again in a minute.".to_owned();
-        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown)).await.map_err(|_| stopping())?;
+        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown { no_carry_on: no_carry_on.map(str::to_owned) })).await.map_err(|_| stopping())?;
         let answer = answer.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;
         drop(client);
         self.until_free().await?;

@@ -1741,6 +1741,59 @@ async fn each_harness_start_is_carried_on_by_one_pass_and_nothing_counted_starts
     carrying.abort();
 }
 
+/// A run in a long turn when you stop every agent from Settings, read as cut.
+async fn stopped_by_you(served: &mut Served, rig: &Rig) -> (Run, String) {
+    let run = rig.launched(1).await;
+    until_detail(rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down_as(Some(crate::sidecar::STOPPED_EVERY_AGENT)).await;
+    let cut = until_detail(rig, &run, crate::runs::consumer::CUT).await;
+    assert_eq!(cut.state, RunState::Stopped);
+    (run, session)
+}
+
+/// That `run` was not carried on, and its timeline says a message would.
+async fn not_carried_on_as_you_stopped_it(rig: &Rig, served: &Served, run: &Run, session: &str) {
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert!(!rows.iter().any(|text| text == "Carried on after the harness restarted"), "{rows:?}");
+    let said = format!("Not carried on after the harness restarted: It may not carry on: {}. {CARRY_ON_BY_MESSAGE}", crate::sidecar::STOPPED_EVERY_AGENT);
+    assert!(rows.contains(&said), "{rows:?}");
+    assert!(!prompted(served, session, CARRY_ON).await, "no carry on reached the agent");
+}
+
+#[tokio::test]
+async fn after_you_stop_every_agent_quit_and_open_the_app_no_run_is_carried_on_and_a_message_resumes_it() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness(&served).await;
+    let (run, session) = stopped_by_you(&mut served, &rig).await;
+    // The next app start serves the harness again and carries on what a restart cut.
+    served.serve_again(4).await;
+    rig.svc.carry_on_after_restart().await;
+    not_carried_on_as_you_stopped_it(&rig, &served, &run, &session).await;
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Go on with the build.").await, "your message resumed it");
+}
+
+#[tokio::test]
+async fn after_you_stop_every_agent_and_start_the_harness_again_no_run_is_carried_on() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = Arc::new(on_harness(&served).await);
+    let (starts, counted) = tokio::sync::watch::channel(0u64);
+    let carrying = tokio::spawn({
+        let rig = rig.clone();
+        async move { rig.svc.carry_on_at_each_start(counted).await }
+    });
+    let (run, session) = stopped_by_you(&mut served, &rig).await;
+    // Settings > Start: counted, then served.
+    starts.send_modify(|n| *n += 1);
+    served.serve_again(4).await;
+    until_refused(&rig, &run, 1).await;
+    not_carried_on_as_you_stopped_it(&rig, &served, &run, &session).await;
+    carrying.abort();
+}
+
 /// A turn waiting on a permission when the harness shut down, and a second turn for a message.
 const ASKS_PERMISSION_THEN_GOES_ON: &str = r#"{"prompt": null}
 {"say": "Reading the cart."}

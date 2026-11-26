@@ -244,6 +244,29 @@ async fn carry_on_a_turn_after_the_stop_lifts_its_mark() {
 }
 
 #[tokio::test]
+async fn after_a_shutdown_with_a_reason_carry_on_is_refused_for_it_a_resume_works_and_its_turn_lifts_the_mark() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let id = {
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        next(&mut events).await;
+        assert!(harness.shutdown_with(Some("you stopped every agent")).await.is_empty());
+        id
+    };
+    let harness = harness_on(reopen(&dir).await, &mock, 4);
+    match harness.resume_with(&id, Some("carry on".into())).await {
+        Err(Error::Refused(said)) => assert!(said.ends_with("may not carry on: you stopped every agent"), "{said}"),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+    let mut events = harness.resume_with(&id, None).await.expect("a message still resumes it");
+    turn(&harness, &id, &mut events, "the person's own").await;
+    assert!(harness.shutdown().await.is_empty());
+    let harness = harness_on(reopen(&dir).await, &mock, 4);
+    assert!(harness.resume_with(&id, Some("carry on".into())).await.is_ok(), "its turn lifted the mark, and a plain shutdown sets none");
+}
+
+#[tokio::test]
 async fn take_back_then_resume_works_and_resume_without_it_is_refused() {
     let (_tmp, dir) = data_dir();
     let mock = mock(TURNS);
