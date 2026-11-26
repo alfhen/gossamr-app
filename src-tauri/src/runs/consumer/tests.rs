@@ -584,6 +584,21 @@ fn permission_a_request_read_again_is_deny_only_when_masked_or_its_payload_is_go
     assert_eq!((two.input.is_null(), two.deny_only), (true, true), "its payload is gone");
 }
 
+#[test]
+fn permission_a_request_holding_an_integer_javascript_cannot_hold_exactly_can_only_be_denied() {
+    use harness::event::PermissionKind;
+    let asked = |input: Value| {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
+        p.run.permissions[0].deny_only
+    };
+    // The page would read 9007199254740993 as 9007199254740992 and show a value the allow does not send.
+    assert!(asked(json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })));
+    assert!(asked(json!({ "command": "sleep 1", "args": [{ "n": -9_007_199_254_740_993_i64 }] })), "nested, and below");
+    assert!(!asked(json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_991_u64, "ratio": 0.1 })), "the largest safe one, and a float");
+}
+
 const REFUSED: &str = "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object";
 
 fn bash(id: &str, command: &str) -> Body {

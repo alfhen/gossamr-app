@@ -635,8 +635,8 @@ pub struct PermissionRequest {
     /// The harness masked part of it as a secret, so the person can't see all of what an allow runs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub masked: bool,
-    /// It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, or Gossamr no longer
-    /// has it whole.
+    /// It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, Gossamr no longer
+    /// has it whole, or it holds an integer the page can't hold exactly (`consumer::shows_exactly`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deny_only: bool,
 }

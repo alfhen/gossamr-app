@@ -1478,7 +1478,7 @@ async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with
     let rig = on_harness(&served).await;
     let run = rig.launched(1).await;
     let id = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].id.clone();
-    for (input, masked, why) in [(None, true, ONLY_DENY_MASKED), (Some(serde_json::Value::Null), false, ONLY_DENY_KIND), (Some(serde_json::json!("git com")), false, ONLY_DENY_CUT)] {
+    for (input, masked, why) in [(None, true, ONLY_DENY_MASKED), (Some(serde_json::Value::Null), false, ONLY_DENY_KIND), (Some(serde_json::json!("git com")), false, ONLY_DENY_CUT), (Some(serde_json::json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })), false, ONLY_DENY_INEXACT)] {
         rig.set(&run, |run| {
             let open = &mut run.permissions[0];
             (open.masked, open.deny_only) = (masked, false);

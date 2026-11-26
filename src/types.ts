@@ -537,7 +537,7 @@ export interface PermissionRequest {
   input: unknown;
   /** The harness masked part of it as a secret (`<redacted>` in place of each), so you can't see all of what an allow runs. */
   masked?: boolean;
-  /** It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, or Gossamr no longer has it whole. */
+  /** It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, Gossamr no longer has it whole, or it holds an integer JavaScript can't hold exactly (beyond ±(2^53 − 1)). */
   denyOnly?: boolean;
 }
 

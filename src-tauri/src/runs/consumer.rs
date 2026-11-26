@@ -551,7 +551,7 @@ fn describe(name: &str, input: &Value) -> String {
 /// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
 fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
     let masked = holds_mask(&input);
-    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object();
+    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input);
     PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
 }
 
@@ -561,6 +561,18 @@ fn holds_more(input: &Value) -> bool {
     match (input.as_object(), shown) {
         (Some(fields), Some(shown)) => fields.keys().any(|key| key != shown),
         _ => false,
+    }
+}
+
+/// Whether the page reads every number of it as the value an allow sends: JavaScript holds an integer exactly only
+/// within ±(2^53 − 1). A float here is already an `f64`, which goes to the page and back to the agent as the same one.
+pub(super) fn shows_exactly(value: &Value) -> bool {
+    const SAFE: u64 = (1 << 53) - 1;
+    match value {
+        Value::Number(n) => n.as_u64().is_none_or(|n| n <= SAFE) && n.as_i64().is_none_or(|n| n.unsigned_abs() <= SAFE),
+        Value::Array(items) => items.iter().all(shows_exactly),
+        Value::Object(fields) => fields.values().all(shows_exactly),
+        _ => true,
     }
 }
 
