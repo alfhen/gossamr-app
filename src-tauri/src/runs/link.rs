@@ -48,6 +48,8 @@ impl ClientTools for NoTools {
 
 /// Why a second answer or a message waits: the harness took the person's answer, and the agent has not had it yet.
 pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
+/// A message to a run whose session the harness no longer runs, with no turn it could have lost.
+pub const NOT_RUNNING: &str = "Its agent isn't running any more, so it takes no message. Ask Pip to start it again.";
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
@@ -183,6 +185,7 @@ impl Link {
                     self.inner.agent_lost(session).await?;
                     Err(super::consumer::AGENT_LOST.into())
                 }
+                Err(why) if not_running(&why) => Err(NOT_RUNNING.into()),
                 Err(why) => Err(why),
             };
         };
@@ -201,7 +204,8 @@ impl Link {
     /// the app applied: its harness went with no shutdown.
     async fn lost_mid_turn(&self, session: &str) -> bool {
         let Ok(Some((_, follow))) = self.inner.core.session_run(session).await else { return false };
-        if follow.closed {
+        // Only a turn the app reads as running can have been lost: a finished run stays finished.
+        if follow.closed || !follow.in_turn {
             return false;
         }
         self.listed(session).await.is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq)
@@ -310,7 +314,16 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
                                 break;
                             }
                         }
-                        Ok(Some(Push::End { .. })) => {}
+                        // A watch ends for a session the harness does not run once every stored event was sent. One
+                        // the app still reads as mid-turn lost its agent with a harness that went with no shutdown,
+                        // after it stored events the app had not read yet.
+                        Ok(Some(Push::End { session })) => {
+                            if link.ended_mid_turn(&session).await {
+                                if let Err(e) = link.agent_lost(&session).await {
+                                    eprintln!("couldn't end the lost turn of session {session}: {e}");
+                                }
+                            }
+                        }
                         // The harness went away or restarted: watch again from what was applied, after a wait, so a
                         // connection that keeps failing is not tried again at once.
                         Ok(None) | Err(_) => {
@@ -330,19 +343,21 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
 async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
     let followed = link.core.followed_sessions().await.map_err(|e| e.to_string())?;
     // A harness that went with no shutdown recorded no end for a turn it was running: its listing says which. A session
-    // with stored events past what was applied has its end in them, and the watch below applies it.
-    let listed = client.call(Op::Sessions).await.map_err(|e| e.to_string())?;
-    let rows: std::collections::HashMap<String, (bool, u64)> = listed
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| Some((row["id"].as_str()?.to_owned(), (row["running"] == true, row["last_seq"].as_u64().unwrap_or(0)))))
-        .collect();
+    // with stored events past what was applied is watched, and its watch's end says whether they held its end. A
+    // listing that fails cuts nothing, and every session is watched all the same.
+    let listed = client.call(Op::Sessions).await.unwrap_or_else(|e| {
+        eprintln!("couldn't list the harness's sessions: {e}");
+        Value::Null
+    });
+    let rows: std::collections::HashMap<String, &Value> = listed.as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?.to_owned(), row))).collect();
     for (session, follow) in followed {
-        let lost = rows.get(&session).is_some_and(|&(running, last)| !running && last <= follow.seq);
+        let lost = rows.get(&session).is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq);
         if follow.in_turn && lost {
             link.agent_lost(&session).await?;
             continue;
+        }
+        if let Some(row) = rows.get(&session) {
+            link.keep_branch(&session, row).await;
         }
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
             eprintln!("couldn't watch session {session}: {e}");
@@ -351,9 +366,9 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         if follow.calls.is_empty() {
             continue;
         }
-        // A call whose result the harness took while the app was away has it among the events not applied yet.
-        let Ok(page) = client.call(Op::Events { session: session.clone(), after: follow.seq }).await else { continue };
-        let answered: std::collections::HashSet<&str> = page["events"].as_array().into_iter().flatten().filter(|e| e["type"] == "tool_result").filter_map(|e| e["id"].as_str()).collect();
+        // A call whose result the harness took while the app was away has it among the events not applied yet, on any
+        // page of them. A page that can't be read answers none of its calls.
+        let Some(answered) = results_after(client, &session, follow.seq).await else { continue };
         let Ok(Some((run_id, _))) = link.core.session_run(&session).await else { continue };
         if let Ok(Some(run)) = link.core.run(&run_id).await {
             for (id, name, input) in follow.calls.into_iter().filter(|(id, ..)| !answered.contains(id.as_str())) {
@@ -366,12 +381,48 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
     Ok(())
 }
 
+/// The ids of the tool results the harness stored for `session` after `after`, read page by page.
+async fn results_after(client: &mut Client, session: &str, after: u64) -> Option<std::collections::HashSet<String>> {
+    let (mut answered, mut after) = (std::collections::HashSet::new(), after);
+    loop {
+        let page = client.call(Op::Events { session: session.to_owned(), after }).await.ok()?;
+        let events = page["events"].as_array().cloned().unwrap_or_default();
+        answered.extend(events.iter().filter(|e| e["type"] == "tool_result").filter_map(|e| e["id"].as_str().map(str::to_owned)));
+        after = events.last().and_then(|e| e["seq"].as_u64()).unwrap_or(after);
+        if page["more"] != true || events.is_empty() {
+            return Some(answered);
+        }
+    }
+}
+
 /// What the harness says of a session it does not run: one a harness that went with no shutdown left as it was.
 fn not_running(why: &str) -> bool {
     why.contains("is not running")
 }
 
 impl Inner {
+    /// Whether the app reads `session` as in a turn that nothing closed, now that its watch ended.
+    async fn ended_mid_turn(&self, session: &str) -> bool {
+        matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.in_turn && !follow.closed)
+    }
+
+    /// Gives a run with no branch yet the branch and worktree the harness made for its session, as its open keeps
+    /// them: an open whose listing failed, or that the app quit after, is filled in at the next connect.
+    async fn keep_branch(&self, session: &str, row: &Value) {
+        let (Some(branch), Some(worktree)) = (row["branch"].as_str(), row["cwd"].as_str()) else { return };
+        let (branch, worktree) = (branch.to_owned(), std::path::PathBuf::from(worktree));
+        let kept = self.core.apply_session(session, move |run, _| {
+            if run.branch.is_none() {
+                run.branch = Some(branch);
+                run.expected_worktree = worktree;
+            }
+            Vec::new()
+        });
+        if let Err(e) = kept.await {
+            eprintln!("couldn't keep the branch of session {session}: {e}");
+        }
+    }
+
     /// Ends, in the app only, the turn of a session the harness does not run though the app follows it as running: the
     /// harness that ran it went with no shutdown, so nothing recorded its end. Pip is not woken.
     async fn agent_lost(&self, session: &str) -> Result<(), String> {

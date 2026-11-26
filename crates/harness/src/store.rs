@@ -177,9 +177,14 @@ pub struct Listed {
     #[serde(default)]
     pub open_question: Option<String>,
     /// The folder the agent works in: the worktree the harness made for a session that names a repo, else the
-    /// folder it was opened in.
-    #[serde(default)]
+    /// folder it was opened in. Sent as text, a byte that is not UTF-8 as U+FFFD, so no session's path can fail the
+    /// listing of them all.
+    #[serde(default, serialize_with = "lossy_path")]
     pub cwd: PathBuf,
+}
+
+fn lossy_path<S: serde::Serializer>(path: &Path, to: S) -> std::result::Result<S::Ok, S::Error> {
+    to.serialize_str(&path.to_string_lossy())
 }
 
 impl Store {

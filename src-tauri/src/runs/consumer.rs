@@ -23,7 +23,7 @@ pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
-pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Message the agent to start it again.";
+pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
@@ -274,6 +274,13 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
     run.state = RunState::Stopped;
     run.last_detail = Some(AGENT_LOST.into());
     run.ended_at = Some(now);
+    // A Stop that found the agent lost is the person's end of the run: nothing is left to answer.
+    if follow.stop_asked {
+        follow.ended = true;
+        follow.question = None;
+        follow.asked = None;
+        drop_answer(run, follow);
+    }
     settle(run, follow);
     run.asking = run.state == RunState::NeedsAnswer;
     run.needs = (run.state == RunState::NeedsAnswer).then(|| follow.asked.clone()).flatten();

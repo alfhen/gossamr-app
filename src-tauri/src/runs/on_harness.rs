@@ -287,7 +287,7 @@ impl RunService {
         }
         Some(match link.send(session, text).await {
             Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
-            Err(why) if why == super::link::ANSWER_ON_ITS_WAY => Err(Error::Proposal(why)),
+            Err(why) if why == super::link::ANSWER_ON_ITS_WAY || why == super::link::NOT_RUNNING => Err(Error::Proposal(why)),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
         })
     }

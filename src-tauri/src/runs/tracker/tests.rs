@@ -1347,3 +1347,35 @@ async fn a_run_bound_to_a_harness_session_after_the_snapshot_is_not_tracked() {
     rig.fx.core.bind_run_session(&run.id, "s1").await.unwrap();
     assert!(rig.svc.watched(&[&snapshot]).await.is_empty(), "its reload is the event consumer's");
 }
+
+#[tokio::test]
+async fn a_run_that_asks_something_new_in_the_same_state_is_told_again() {
+    let told = Arc::new(Announced::default());
+    let rig = crate::runs::rig::ready_with({
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    let run = rig.queued(1).await;
+    let ask = |need: &'static str| {
+        let rig = &rig;
+        let run = run.clone();
+        async move {
+            rig.set(&run, |r| {
+                r.state = RunState::NeedsAnswer;
+                r.harness_session = Some("hs-1".into());
+                r.needs = Some(need.into());
+                r.asking = true;
+            })
+            .await;
+            rig.poll().await;
+        }
+    };
+    rig.poll().await;
+    ask("Which database?").await;
+    ask("Which database?").await;
+    ask("Which port?").await;
+    let bodies: Vec<String> = told.0.lock().unwrap().iter().map(|(_, body, _)| body.clone()).collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert!(bodies[0].ends_with("Which database?") && bodies[1].ends_with("Which port?"), "{bodies:?}");
+}
