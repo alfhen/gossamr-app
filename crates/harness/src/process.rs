@@ -67,6 +67,73 @@ pub fn alive(process: &Process) -> bool {
     answers && started_of(process.pid).is_some_and(|started| started == process.started)
 }
 
+/// Whether `process` may still run: it is alive, or it answers that it may not be signalled, as another user's process
+/// does (a command an agent ran with sudo). Such a process cannot be told from gone, so it is taken as running.
+pub fn may_run(process: &Process) -> bool {
+    alive(process) || refuses_signals(process.pid)
+}
+
+fn refuses_signals(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    let answered = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Whether `process` started well before this machine last booted, so it and its group are gone. Ten minutes of slack,
+/// as a clock set forward moves the boot time with it.
+pub fn started_before_this_boot(process: &Process) -> bool {
+    booted().is_some_and(|(booted, per_second)| process.started.saturating_add(600 * per_second) < booted)
+}
+
+/// When this machine booted, in the unit of `started_of`, and that unit's count per second.
+#[cfg(target_os = "macos")]
+fn booted() -> Option<(u64, u64)> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+    let mut boot = std::mem::MaybeUninit::<libc::timeval>::zeroed();
+    let mut size = std::mem::size_of::<libc::timeval>();
+    // SAFETY: `boot` is as large as `size` says, and the call writes at most that much.
+    let got = unsafe { libc::sysctl(mib.as_mut_ptr(), 2, boot.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    if got != 0 || size != std::mem::size_of::<libc::timeval>() {
+        return None;
+    }
+    // SAFETY: the call filled the whole struct.
+    Some((u64::try_from(unsafe { boot.assume_init() }.tv_sec).ok()?, 1))
+}
+
+#[cfg(target_os = "linux")]
+fn booted() -> Option<(u64, u64)> {
+    // SAFETY: sysconf has no preconditions.
+    let per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|ticks| *ticks > 0)?;
+    Some((booted_ticks()?, per_second))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn booted() -> Option<(u64, u64)> {
+    None
+}
+
+/// The folder `pid` works in.
+#[cfg(target_os = "macos")]
+fn cwd_of(pid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+    // SAFETY: `info` is as large as `size` says, and the call fills at most that much.
+    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDVNODEPATHINFO, 0, info.as_mut_ptr().cast(), size) };
+    if got != size {
+        return None;
+    }
+    // SAFETY: the call filled the whole struct.
+    let info = unsafe { info.assume_init() };
+    let path: Vec<u8> = info.pvi_cdir.vip_path.iter().flatten().map(|c| *c as u8).take_while(|b| *b != 0).collect();
+    (!path.is_empty()).then(|| std::ffi::OsString::from_vec(path).into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cwd_of(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
 /// Sends `signal` to the process alone. Returns false, and sends nothing, when the pid is no longer the run's.
 pub fn signal(process: &Process, signal: libc::c_int) -> std::io::Result<bool> {
     if !alive(process) {
@@ -89,15 +156,18 @@ pub fn signal_group(process: &Process, signal: libc::c_int) -> std::io::Result<b
 pub enum Left {
     /// Nothing that runs.
     Nothing,
-    /// Members that run, each started at or after the leader, so the agent's own work: a background task or a command.
+    /// Members that run, each started at or after the leader in a folder inside the agent's own, so plausibly its work:
+    /// a background task or a command.
     Ours(Vec<Process>),
-    /// A listing that proves nothing, or a member that started before the leader and so is not the agent's.
+    /// A listing that proves nothing, or a member that may not be the agent's: one that started before the leader, works
+    /// outside its folder, or cannot be read. The leader's pid can lead another group by now, such as a pipeline whose
+    /// first command exited, and what this would kill is the person's own.
     Unknown,
 }
 
-/// What runs on in the group `leader` led, once it is gone. Its group is never signalled for this: the leader's pid may
-/// lead another group by now.
-pub fn left_of(leader: &Process) -> Left {
+/// What runs on in the group `leader` led, once it is gone, where the agent worked in `worktree`. Its group is never
+/// signalled for this: the leader's pid may lead another group by now.
+pub fn left_of(leader: &Process, worktree: &std::path::Path) -> Left {
     let group = leader.pid as libc::pid_t;
     #[cfg(any(test, feature = "testing"))]
     let listing = seam::listing(group).unwrap_or_else(|| members_left(group));
@@ -108,15 +178,19 @@ pub fn left_of(leader: &Process) -> Left {
         Listing::Nothing => return Left::Nothing,
         Listing::Members(pids) => pids,
     };
+    let within = std::fs::canonicalize(worktree).ok();
     let mut ours = vec![];
     for pid in pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()) {
         match started_of(pid) {
+            None if refuses_signals(pid) => return Left::Unknown,
             // A zombie, or reaped since the listing.
             None => {}
             // The leader's pid is another process's: no pid is given out while it names a group that has members, so
             // the agent's group is gone and this one is another's.
             Some(started) if pid == leader.pid && started != leader.started => return Left::Nothing,
-            Some(started) if started >= leader.started => ours.push(Process { pid, started }),
+            Some(started) if started >= leader.started && cwd_of(pid).zip(within.as_ref()).is_some_and(|(cwd, within)| cwd.starts_with(within)) => {
+                ours.push(Process { pid, started })
+            }
             Some(_) => return Left::Unknown,
         }
     }
@@ -281,7 +355,7 @@ pub mod seam {
         static SENT: RefCell<Vec<(libc::pid_t, libc::c_int)>> = const { RefCell::new(Vec::new()) };
         static FAILING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
         static REFUSED_GROUPS: RefCell<HashMap<libc::pid_t, usize>> = RefCell::new(HashMap::new());
-        static LISTINGS: RefCell<Vec<(libc::pid_t, Listing)>> = const { RefCell::new(Vec::new()) };
+        static LISTINGS: RefCell<Vec<(libc::pid_t, Listing, bool)>> = const { RefCell::new(Vec::new()) };
         static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
     }
 
@@ -304,7 +378,11 @@ pub mod seam {
     }
 
     pub(super) fn listing(group: libc::pid_t) -> Option<Listing> {
-        LISTINGS.with(|all| all.borrow().iter().find(|(g, _)| *g == group).map(|(_, listing)| listing.clone()))
+        LISTINGS.with(|all| {
+            let mut all = all.borrow_mut();
+            let at = all.iter().position(|(g, _, _)| *g == group)?;
+            Some(if all[at].2 { all.remove(at).1 } else { all[at].1.clone() })
+        })
     }
 
     /// Makes the next `times` SIGKILLs to the group `pid` leads fail with EPERM, as macOS answers for a group of zombies.
@@ -314,7 +392,12 @@ pub mod seam {
 
     /// What listing the members of the group `pid` leads gives, in place of asking the system.
     pub fn list_group_as(pid: u32, listing: Listing) {
-        LISTINGS.with(|all| all.borrow_mut().push((pid as libc::pid_t, listing)));
+        LISTINGS.with(|all| all.borrow_mut().push((pid as libc::pid_t, listing, false)));
+    }
+
+    /// As `list_group_as`, for the next listing only: the ones after it ask the system.
+    pub fn list_group_once_as(pid: u32, listing: Listing) {
+        LISTINGS.with(|all| all.borrow_mut().push((pid as libc::pid_t, listing, true)));
     }
 
     /// Every signal that was aimed at `pid` or its group.

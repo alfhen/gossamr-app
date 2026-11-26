@@ -878,9 +878,10 @@ async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes
     let cut = lines.iter().take_while(|line| line["data"]["note"] != "signal").filter(|line| line["dir"] == "from_agent").last().unwrap()["seq"].as_u64().unwrap();
     played(&first, cut).await;
     let (session, agent) = (provider_session(&seen), first.process());
-    // An agent the shutdown cannot stop, as a stuck one: it ignores SIGTERM and its group kill is refused.
+    // An agent the shutdown cannot stop, as a stuck one: it ignores SIGTERM and its group kill is refused, and the
+    // listing that would settle the refusal proves nothing, that once.
     process::seam::refuse_group_kills(agent.pid, 1);
-    process::seam::list_group_as(agent.pid, Listing::Full);
+    process::seam::list_group_once_as(agent.pid, Listing::Full);
     assert_eq!(first.harness.shutdown().await, std::slice::from_ref(&id), "the shutdown gave up on it mid-turn");
     // The shutdown gives up when the session's wait ends, which may be before the driver's kill took the refusal; the
     // next harness's leftover stop must not take it instead.

@@ -328,6 +328,24 @@ impl Store {
         Ok(agents.into_iter().map(|(id, pid, started)| (id, Process { pid, started: started as u64 })).collect())
     }
 
+    /// Each session with an agent on record, by id alone, so a record that cannot be read back is still found.
+    pub fn recorded(&self) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare("SELECT id FROM sessions WHERE agent_pid IS NOT NULL ORDER BY id")?;
+        let ids = statement.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
+    /// The agent on record for session `id`, with the folder it worked in, or None when none is.
+    pub fn agent(&self, id: &str) -> Result<Option<(Process, PathBuf)>> {
+        let row = self.conn.query_row("SELECT agent_pid, agent_started, cwd FROM sessions WHERE id = ?1", [id], |row| {
+            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Vec<u8>>(2)?))
+        })?;
+        Ok(match row {
+            (Some(pid), Some(started), cwd) => Some((Process { pid, started: started as u64 }, PathBuf::from(OsString::from_vec(cwd)))),
+            _ => None,
+        })
+    }
+
     /// Names the tools endpoint of a session made before the store kept the name.
     pub fn set_endpoint(&self, id: &str, endpoint: &str) -> Result<()> {
         self.conn.execute("UPDATE sessions SET endpoint = ?2 WHERE id = ?1 AND endpoint IS NULL", params![id, endpoint])?;

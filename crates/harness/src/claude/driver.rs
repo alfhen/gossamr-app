@@ -320,7 +320,7 @@ pub struct Stream {
     locked: Option<Vec<String>>,
     /// Claude offered a locked session another tool, so the agent must go and nothing more it says is passed on.
     refused: bool,
-    /// The cost Claude's last `result` gave: a total for this process, which a resume starts again.
+    /// The cost Claude's last `result` gave, a running total, for a `result` that does not say its turn's own.
     cost_so_far: f64,
 }
 
@@ -644,8 +644,11 @@ impl Stream {
         (self.turn, self.cancelled) = (false, false);
         self.asked.clear();
         let total = result["total_cost_usd"].as_f64().filter(|total| total.is_finite() && *total >= 0.0);
-        // Claude's cost is the process's so far, where its tokens are the turn's: the turn's cost is what it added.
-        let turn_cost = total.map(|total| (total - std::mem::replace(&mut self.cost_so_far, total)).max(0.0));
+        let added = total.map(|total| (total - std::mem::replace(&mut self.cost_so_far, total)).max(0.0));
+        // Claude's total is the session's so far, and a resumed process's first one holds what the process before it
+        // spent: the turn's cost is its models' since the last `result`, or else what it added to the total.
+        let since = result["model_usage_since_last_result"].as_object().and_then(|models| models.values().map(|used| used["costUSD"].as_f64()).sum::<Option<f64>>());
+        let turn_cost = since.filter(|cost| cost.is_finite() && *cost >= 0.0).or(added);
         if let Some(used) = super::stream::usage_of(result) {
             self.emit(Body::Usage {
                 input_tokens: used.input_tokens,
@@ -1102,6 +1105,24 @@ mod tests {
         let mut w = wire();
         w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash", "mcp__other__find"]}));
         assert!(!w.stream.refused, "a normal session may have any tools");
+    }
+
+    #[test]
+    fn a_resumed_processes_first_usage_costs_its_turn_not_what_the_process_before_it_spent() {
+        // In both, the resumed process's first total holds the spend of the killed one before it.
+        for (fixture, turn, total) in [("4-resume", 0.00192457, 0.00231284), ("4-resume-mcp", 0.00172612, 0.00725055)] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../spikes/acp/fixtures/claude/native/{fixture}.jsonl"));
+            let results: Vec<Value> = std::fs::read_to_string(path).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|line| line["dir"] == "from_agent" && line["data"]["type"] == "result").map(|line| line["data"].clone()).collect();
+            let [result] = &results[..] else { panic!("{fixture}: one result") };
+            assert!((result["total_cost_usd"].as_f64().unwrap() - total).abs() < 1e-12, "{fixture}: the recording's total");
+            let mut w = wire();
+            w.stream.prompt("carry on".into());
+            w.agent(init());
+            w.agent(result.clone());
+            let cost = w.said().into_iter().find_map(|body| match body { Body::Usage { cost_usd, .. } => cost_usd, _ => None });
+            assert!(cost.is_some_and(|cost| (cost - turn).abs() < 1e-12), "{fixture}: the turn's own cost, not the total: {cost:?}");
+        }
     }
 
     #[test]

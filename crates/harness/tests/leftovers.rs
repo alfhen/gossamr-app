@@ -3,13 +3,16 @@
 mod common;
 
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
+use harness::driver::{Capabilities, Driver, Launch, Link, OpenError};
+use harness::event::Body;
 use harness::process::{self, Listing, Process};
-use harness::session::Harness;
+use harness::session::{Harness, Open};
 use harness::store::Store;
 
 /// A process in a group of its own, as an agent is started.
@@ -41,21 +44,38 @@ fn running(child: &mut Child) -> bool {
     child.try_wait().unwrap().is_none()
 }
 
+/// The store in `dir`, once its lock is free: a child another test forks holds a copy of it until it execs, as
+/// `common::reopen` says.
+fn opened(dir: &Path) -> Store {
+    for _ in 0..200 {
+        match Store::open(dir) {
+            Err(harness::error::Error::InUse(_)) => std::thread::sleep(Duration::from_millis(10)),
+            opened => return opened.unwrap(),
+        }
+    }
+    panic!("the store stayed locked");
+}
+
 /// A store with session `s`, given up on by a shutdown, whose agent is `agent`.
 fn left_by_a_shutdown(dir: &Path, agent: Option<&Process>) {
-    let store = Store::open(dir).unwrap();
-    store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
+    left_in(dir, agent, Path::new("/a"));
+}
+
+/// As `left_by_a_shutdown`, for an agent that worked in `worktree`.
+fn left_in(dir: &Path, agent: Option<&Process>, worktree: &Path) {
+    let store = opened(dir);
+    store.create_session("s", "mock", false, worktree, None).unwrap();
     store.set_agent("s", agent).unwrap();
     store.set_given_up("s").unwrap();
 }
 
 fn started_harness(dir: &Path) -> Harness {
-    Harness::new(Store::open(dir).unwrap(), vec![], settings(4))
+    Harness::new(opened(dir), vec![], settings(4))
 }
 
 /// Session `s`'s events, read once the harness is gone.
 fn said(dir: &Path) -> Vec<harness::event::Body> {
-    Store::open(dir).unwrap().events("s", 0).unwrap().into_iter().map(|event| event.body).collect()
+    opened(dir).events("s", 0).unwrap().into_iter().map(|event| event.body).collect()
 }
 
 /// What a start that its next harness ended says last: a `failed` that says how, and a `closed` by the harness.
@@ -66,7 +86,7 @@ fn ended_by_the_next_harness(said: &[harness::event::Body], how: &str) -> bool {
 
 fn row(harness: Harness, dir: &Path) -> (bool, Vec<(String, Process)>) {
     drop(harness);
-    let store = Store::open(dir).unwrap();
+    let store = opened(dir);
     (store.session("s").unwrap().given_up, store.agents().unwrap())
 }
 
@@ -88,7 +108,7 @@ fn leftover_a_start_that_already_closed_gets_no_second_end() {
     left_by_a_shutdown(&dir, Some(&agent));
     let closed = harness::event::Body::Closed { by: harness::event::ClosedBy::Shutdown };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-    Store::open(&dir).unwrap().append("s", &closed, now).unwrap();
+    opened(&dir).append("s", &closed, now).unwrap();
     let harness = started_harness(&dir);
     assert_eq!(ended(child), Some(libc::SIGKILL));
     drop(harness);
@@ -137,7 +157,7 @@ fn leftover_an_agent_whose_kill_is_refused_stays_on_record_and_given_up() {
 
 /// A store with session `s`, left by a harness that crashed: not given up on, its agent on record.
 fn left_by_a_crash(dir: &Path, agent: &Process) {
-    let store = Store::open(dir).unwrap();
+    let store = opened(dir);
     store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
     store.set_agent("s", Some(agent)).unwrap();
 }
@@ -183,31 +203,54 @@ async fn leftover_no_resume_while_the_leftovers_could_not_be_listed_and_a_client
     assert_eq!(ended(child), Some(libc::SIGKILL), "the leftover was stopped by that check");
 }
 
+/// A worktree folder beside the data folder.
+fn worktree(dir: &Path) -> PathBuf {
+    let worktree = dir.with_file_name("worktree");
+    std::fs::create_dir_all(&worktree).unwrap();
+    worktree
+}
+
 /// The reviewer's probe: a leader in a group of its own starts `sleep 60` in the background and exits, reaped. Its
-/// record, taken while it ran, and the sleep, which keeps the group.
-fn a_leader_gone_with_its_work_left() -> (Process, Process) {
+/// record, taken while it ran, and the sleep, which keeps the group. Both work in `cwd`.
+fn a_leader_gone_with_its_work_left(cwd: &Path) -> (Process, Process) {
+    let (leader, mut work) = a_leader_gone_leaving(cwd, 1);
+    (leader, work.remove(0))
+}
+
+/// As `a_leader_gone_with_its_work_left`, with `count` sleeps left.
+fn a_leader_gone_leaving(cwd: &Path, count: usize) -> (Process, Vec<Process>) {
     let mut leader = Command::new("/bin/sh")
-        .args(["-c", "sleep 60 & echo $!; read go"])
+        .args(["-c", &format!("{} read go", "sleep 60 & echo $!;".repeat(count))])
+        .current_dir(cwd)
         .process_group(0)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     let record = Process { pid: leader.id(), started: process::started_of(leader.id()).expect("it runs") };
-    let mut said = String::new();
-    std::io::BufRead::read_line(&mut std::io::BufReader::new(leader.stdout.take().unwrap()), &mut said).unwrap();
-    let pid: u32 = said.trim().parse().unwrap();
-    let work = Process { pid, started: process::started_of(pid).expect("the sleep runs") };
+    let mut said = std::io::BufRead::lines(std::io::BufReader::new(leader.stdout.take().unwrap()));
+    let work = (0..count)
+        .map(|_| {
+            let pid: u32 = said.next().unwrap().unwrap().trim().parse().unwrap();
+            Process { pid, started: process::started_of(pid).expect("the sleep runs") }
+        })
+        .collect();
     drop(leader.stdin.take());
     leader.wait().unwrap();
     (record, work)
 }
 
+fn kill(process: &Process) {
+    // SAFETY: a sleep's own pid, read while it ran; it may be gone, and nothing else took it within the test.
+    unsafe { libc::kill(process.pid as libc::pid_t, libc::SIGKILL) };
+}
+
 #[test]
 fn leftover_whose_leader_is_gone_has_what_it_left_in_its_group_stopped_before_its_session_is_freed() {
     let (_tmp, dir) = data_dir();
-    let (leader, work) = a_leader_gone_with_its_work_left();
-    left_by_a_shutdown(&dir, Some(&leader));
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in(&dir, Some(&leader), &worktree);
     let harness = started_harness(&dir);
     assert!(!process::alive(&work), "the work its group kept was killed");
     assert_eq!(row(harness, &dir), (false, vec![]), "and only then is the session free");
@@ -236,8 +279,9 @@ fn leftover_whose_leader_is_gone_and_whose_group_holds_one_older_than_it_stays_g
 #[test]
 fn leftover_whose_leader_is_gone_and_whose_group_cannot_be_read_stays_given_up_and_nothing_is_signalled() {
     let (_tmp, dir) = data_dir();
-    let (leader, work) = a_leader_gone_with_its_work_left();
-    left_by_a_shutdown(&dir, Some(&leader));
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in(&dir, Some(&leader), &worktree);
     process::seam::list_group_as(leader.pid, Listing::Full);
     let harness = started_harness(&dir);
     assert!(process::alive(&work), "a listing that proves nothing signals nothing");
@@ -245,4 +289,150 @@ fn leftover_whose_leader_is_gone_and_whose_group_cannot_be_read_stays_given_up_a
     assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
     // SAFETY: the sleep's own pid, read while it runs.
     unsafe { libc::kill(work.pid as libc::pid_t, libc::SIGKILL) };
+}
+
+#[test]
+fn leftover_whose_leader_is_gone_and_whose_group_works_outside_its_worktree_stays_given_up_and_nothing_is_signalled() {
+    // The leader's pid may lead another group by now, such as a pipeline whose first command exited: what runs in it
+    // outside the agent's worktree is taken for the person's own.
+    let (_tmp, dir) = data_dir();
+    let elsewhere = dir.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
+    left_in(&dir, Some(&leader), &worktree(&dir));
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "not plausibly the agent's, so not killed");
+    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    kill(&work);
+}
+
+#[test]
+fn leftover_recorded_before_this_boot_is_gone_with_its_group_and_nothing_is_signalled() {
+    // A record from before the machine last booted: whatever runs in a group of that id now is another's, even in the
+    // worktree.
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    let before_boot = Process { pid: leader.pid, started: 0 };
+    left_in(&dir, Some(&before_boot), &worktree);
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "a group cannot outlive a reboot");
+    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (false, vec![]), "and its session is free");
+    assert!(ended_by_the_next_harness(&said(&dir), "gone too"), "{:?}", said(&dir));
+    kill(&work);
+}
+
+#[test]
+fn leftover_whose_group_gains_a_member_after_its_listing_has_that_one_stopped_too() {
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_leaving(&worktree, 2);
+    left_in(&dir, Some(&leader), &worktree);
+    // The first listing holds one of them, as when the other forks just after it.
+    process::seam::list_group_once_as(leader.pid, Listing::Members(vec![work[0].pid as libc::pid_t]));
+    let harness = started_harness(&dir);
+    assert!(work.iter().all(|member| !process::alive(member)), "the one the second listing found was killed too");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+#[test]
+fn leftover_whose_group_holds_a_process_it_may_not_signal_stays_given_up() {
+    // Pid 1 is another user's to anyone but root: a command an agent ran with sudo is the same, running and unreadable.
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    kill(&work);
+    left_in(&dir, Some(&leader), &worktree);
+    process::seam::list_group_as(leader.pid, Listing::Members(vec![1]));
+    let harness = started_harness(&dir);
+    assert!(process::may_run(&Process { pid: 1, started: 0 }), "a process that refuses signals may run");
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+}
+
+#[test]
+fn leftover_stops_share_one_deadline_however_many_will_not_go() {
+    // Kills that never land: with one deadline for all, three take about as long as one.
+    let waited = |count: usize| {
+        let (_tmp, dir) = data_dir();
+        let store = opened(&dir);
+        let agents: Vec<(Child, Process)> = (0..count).map(|_| agent()).collect();
+        for (n, (_, agent)) in agents.iter().enumerate() {
+            store.create_session(&format!("s{n}"), "mock", false, Path::new("/a"), None).unwrap();
+            store.set_agent(&format!("s{n}"), Some(agent)).unwrap();
+            process::seam::swallow_group_kills(agent.pid);
+        }
+        let begun = std::time::Instant::now();
+        let harness = Harness::new(store, vec![], settings(4));
+        let waited = begun.elapsed();
+        drop(harness);
+        for (mut child, _) in agents {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        waited
+    };
+    let (one, three) = (waited(1), waited(3));
+    assert!(three < one * 2, "three waited {three:?}, one {one:?}");
+}
+
+/// An agent that is a `sleep` in a group of its own, and goes when it is stopped.
+#[derive(Default, Clone)]
+struct Sleeper {
+    children: Arc<Mutex<Vec<Child>>>,
+}
+
+impl Driver for Sleeper {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (child, agent) = agent();
+        let pid = child.id();
+        self.children.lock().unwrap().push(child);
+        let (commands, mut commands_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (output, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: format!("sleeper-{pid}"), resumed: false });
+        tokio::spawn(async move {
+            let _ = commands_rx.recv().await;
+            // SAFETY: the sleep this driver started, not reaped until the test's end.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver, process: Some(agent) })
+    }
+}
+
+#[tokio::test]
+async fn leftover_retried_after_a_record_could_not_be_read_never_touches_an_agent_this_harness_started() {
+    let (_tmp, dir) = data_dir();
+    let (old_child, old) = agent();
+    left_by_a_crash(&dir, &old);
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET agent_pid = -1 WHERE id = 's'", []).unwrap();
+    let sleeper = Sleeper::default();
+    let harness = Harness::new(opened(&dir), vec![("sleeper".into(), Arc::new(sleeper.clone()))], settings(4));
+    assert!(harness.sessions().unwrap()[0].held.is_some(), "held");
+    let (id, mut events) = harness.open(Open { provider: "sleeper".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+    events.recv().await.unwrap();
+    raw.execute("UPDATE sessions SET agent_pid = ?1 WHERE id = 's'", [old.pid]).unwrap();
+    let _ = harness.resume("s").await;
+    assert_eq!(ended(old_child), Some(libc::SIGKILL), "the leftover was stopped by that retry");
+    let running = sleeper.children.lock().unwrap()[0].try_wait().unwrap().is_none();
+    assert!(running, "the agent this harness started runs on");
+    let closes = |harness: &Harness| harness.events(&id, 0).unwrap().into_iter().filter(|event| matches!(event.body, Body::Closed { .. })).count();
+    assert_eq!(closes(&harness), 0, "its start is not ended for it");
+    harness.close(&id).unwrap();
+    while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
+    assert_eq!(closes(&harness), 1, "one closed for its start");
+    for mut child in sleeper.children.lock().unwrap().drain(..) {
+        let _ = child.kill();
+        child.wait().unwrap();
+    }
 }
