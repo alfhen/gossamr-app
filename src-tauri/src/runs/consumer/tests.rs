@@ -532,7 +532,7 @@ fn permission_the_app_keeps_a_copy_its_redactor_masked_and_shows_and_allows_from
 #[test]
 fn permission_a_secret_the_harness_let_through_is_kept_nowhere_in_the_run_its_follow_or_its_rows() {
     use harness::event::PermissionKind;
-    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret")] {
+    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret"), (json!({ "command": "env", "env": { "GITHUB_TOKEN": "abc123undername" } }), "abc123undername"), (json!({ "command": "deploy", "secrets": { "github": ["abc123inalist"] } }), "abc123inalist")] {
         let mut p = Played::new();
         p.play(started());
         p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
@@ -548,6 +548,15 @@ fn permission_a_request_the_harness_masked_stays_masked_and_deny_only_in_its_own
     let event = Event { seq: 1, ms: 0, body: Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }, cut: None };
     let shown = harness_copy(&event).unwrap();
     assert!(shown.masked && shown.deny_only);
+}
+
+#[test]
+fn permission_a_text_under_a_key_that_names_a_secret_is_masked_in_the_stored_copy_and_a_flag_or_number_there_is_kept() {
+    let (masked, ours) = masked_copy(&json!({ "env": { "GITHUB_TOKEN": "abc123undername", "TOKEN_TTL": 60 }, "private": true, "password": "" }));
+    assert!(ours);
+    assert_eq!(masked, json!({ "env": { "GITHUB_TOKEN": crate::runs::redact::MASK, "TOKEN_TTL": 60 }, "private": true, "password": "" }));
+    let (_, ours) = masked_copy(&json!({ "command": "gh repo create acme/site", "private": true }));
+    assert!(!ours, "nothing secret to mask");
 }
 
 #[test]

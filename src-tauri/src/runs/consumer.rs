@@ -655,14 +655,22 @@ pub(super) fn shows_exactly(value: &Value) -> bool {
 
 /// `value` with the app's redactor run over every text in it, keys and values, and whether that masked anything.
 fn masked_copy(value: &Value) -> (Value, bool) {
+    masked_under(value, false)
+}
+
+/// `masked_copy`, where `secret` says the value sits under a key that names a secret (`GITHUB_TOKEN`, `password`): then
+/// every text in it is masked whole, since `redact` sees the text alone. A number or a flag there is kept, so
+/// `"private": true` stays readable.
+fn masked_under(value: &Value, secret: bool) -> (Value, bool) {
     match value {
+        Value::String(text) if secret && !text.is_empty() => (Value::String(super::redact::MASK.to_owned()), true),
         Value::String(text) => {
             let out = redact(text);
             let masked = out != *text;
             (Value::String(out), masked)
         }
         Value::Array(items) => {
-            let (items, masked): (Vec<_>, Vec<_>) = items.iter().map(masked_copy).unzip();
+            let (items, masked): (Vec<_>, Vec<_>) = items.iter().map(|item| masked_under(item, secret)).unzip();
             (Value::Array(items), masked.into_iter().any(|m| m))
         }
         Value::Object(fields) => {
@@ -678,7 +686,7 @@ fn masked_copy(value: &Value) -> (Value, bool) {
                     name = format!("{base} {n}");
                     n += 1;
                 }
-                let (value, inner) = masked_copy(value);
+                let (value, inner) = masked_under(value, secret || super::redact::is_secret_name(key));
                 masked |= inner;
                 out.insert(name, value);
             }

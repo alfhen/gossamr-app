@@ -59,7 +59,7 @@ fn words(s: &str) -> Vec<Range<usize>> {
     out
 }
 
-fn is_secret_name(name: &str) -> bool {
+pub(super) fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     SECRET_NAMES.iter().any(|n| lower.contains(n))
 }
