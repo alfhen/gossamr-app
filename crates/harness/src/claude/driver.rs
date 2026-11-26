@@ -410,10 +410,14 @@ impl Agent {
             if let Some(AgentEnd::Signalled { signal, sent: false }) = ended {
                 how.push_str(&format!(", ended by signal {signal}"));
             }
-            self.stream.fail(match said {
+            // What a logout or a restart sends first, and the driver did not, cuts the turn: the session closes it as
+            // `signal`, whose cut a carry on may take up. Not the agent's own failure.
+            let cut = self.stream.turn && matches!(ended, Some(AgentEnd::Signalled { signal: libc::SIGTERM | libc::SIGHUP | libc::SIGINT, sent: false }));
+            let reason = match said {
                 Some(said) => format!("{how}: {said}"),
                 None => how,
-            });
+            };
+            self.stream.fail_as(if cut { FailKind::AgentStopped } else { FailKind::Provider }, reason);
         }
         // Before `output` closes with the agent, as the session reads it then.
         if let (Some(end), Some(ended)) = (self.end.take(), ended) {
@@ -508,10 +512,15 @@ impl Stream {
 
     /// Ends the session's run with `reason`: the running turn, if any, ends with it, and nothing waits any more.
     fn fail(&mut self, reason: String) {
+        self.fail_as(FailKind::Provider, reason);
+    }
+
+    /// `fail`, as `kind`.
+    fn fail_as(&mut self, kind: FailKind, reason: String) {
         (self.turn, self.cancelled) = (false, false);
         self.asked.clear();
         self.held.clear();
-        self.emit(Body::Failed { kind: FailKind::Provider, reason });
+        self.emit(Body::Failed { kind, reason });
     }
 
     /// Opens a turn the agent started by itself, so what it says has one to belong to.
@@ -1039,6 +1048,33 @@ mod tests {
             while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
             let ended = ended.await.expect("the driver said how it ended");
             assert_eq!(ended, AgentEnd::Signalled { signal: libc::SIGTERM, sent: !outside });
+        }
+    }
+
+    #[tokio::test]
+    async fn a_logouts_signal_in_a_turn_cuts_it_and_any_other_end_fails_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = crate::testing::fake_cli(&tmp.path().join("claude"), "exec sleep 30");
+        for (signal, cut) in [(libc::SIGTERM, true), (libc::SIGHUP, true), (libc::SIGINT, true), (libc::SIGKILL, false)] {
+            let driver = ClaudeDriver::new(claude.clone()).with_graces(Duration::from_millis(100), Duration::from_secs(5));
+            let mut launch = launch(false, None, None);
+            launch.env = vec![("PATH".into(), "/usr/bin:/bin".into())];
+            launch.cwd = tmp.path().into();
+            let (report, _ended) = tokio::sync::oneshot::channel();
+            let mut link = driver.open_reporting(launch, EndReport(report)).unwrap();
+            let agent = link.process.clone().unwrap();
+            link.commands.send(Command::Prompt("go".into())).unwrap();
+            // SAFETY: the fake's own pid, which the driver has not reaped.
+            assert_eq!(unsafe { libc::kill(agent.pid as libc::pid_t, signal) }, 0);
+            let mut said = vec![];
+            while let Some(body) = tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes") {
+                said.push(body);
+            }
+            let kind = if cut { FailKind::AgentStopped } else { FailKind::Provider };
+            assert!(
+                said.iter().any(|body| matches!(body, Body::Failed { kind: k, reason } if *k == kind && reason.starts_with("claude exited in the middle of a turn"))),
+                "signal {signal}: {said:?}"
+            );
         }
     }
 

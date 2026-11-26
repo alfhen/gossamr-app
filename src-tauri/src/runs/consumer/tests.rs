@@ -788,3 +788,14 @@ fn a_harness_that_went_without_a_shutdown_leaves_a_cut_to_carry_on_and_a_new_tur
     let read: ClosedBy = serde_json::from_value(json!("harness_went")).unwrap();
     assert_eq!(read, ClosedBy::HarnessWent, "as the harness writes it");
 }
+
+#[test]
+fn an_agent_that_stopped_between_turns_cut_nothing_and_a_finished_run_stays_done() {
+    let mut p = Played::new();
+    let went = "the harness that ran this agent went, and the next one stopped it";
+    p.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.state, RunState::Done);
+    p.play([Body::Failed { kind: FailKind::AgentStopped, reason: went.into() }, Body::Closed { by: ClosedBy::HarnessWent }]);
+    assert_eq!((p.run.state, p.run.error.as_deref(), p.follow.cut.as_deref(), p.follow.closed), (RunState::Done, None, None, true), "no cut to carry on");
+    assert!(!p.rows.iter().any(|row| row.text == CUT), "no cut is said either");
+}

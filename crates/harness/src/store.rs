@@ -378,17 +378,24 @@ impl Store {
         Ok(())
     }
 
-    /// Ends a leftover's start in its events as its own harness would have, a `failed` that says `how` and a `closed`
-    /// as `harness_went`, unless it had closed, and clears its agent: all of it or none, so a failure leaves the leftover
-    /// on record for the next check.
+    /// Ends a leftover's start in its events as its own harness would have, unless it had closed: a `failed` that says
+    /// `how` for a turn still open, which the start cut, and a `closed` as `harness_went`. A turn that had ended is no
+    /// cut, so nothing takes it up again. It clears the agent too: all of it or none, so a failure leaves the leftover on
+    /// record for the next check.
     pub fn end_leftover(&self, id: &str, how: &str, ms: i64) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let closed: Option<String> = self
             .conn
             .query_row("SELECT type FROM events WHERE session = ?1 ORDER BY seq DESC LIMIT 1", [id], |row| row.get(0))
             .optional()?;
+        let last_turn: Option<String> = self
+            .conn
+            .query_row("SELECT type FROM events WHERE session = ?1 AND type IN ('turn_started', 'turn_ended', 'failed') ORDER BY seq DESC LIMIT 1", [id], |row| row.get(0))
+            .optional()?;
         if closed.as_deref() != Some("closed") {
-            self.insert_event(id, &Body::Failed { kind: crate::event::FailKind::AgentStopped, reason: how.to_owned() }, ms, None)?;
+            if last_turn.as_deref() == Some("turn_started") {
+                self.insert_event(id, &Body::Failed { kind: crate::event::FailKind::AgentStopped, reason: how.to_owned() }, ms, None)?;
+            }
             self.insert_event(id, &Body::Closed { by: crate::event::ClosedBy::HarnessWent }, ms, None)?;
         }
         self.set_agent(id, None)?;

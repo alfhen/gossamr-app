@@ -186,14 +186,19 @@ impl Link {
         };
         mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
         let carry_on = counted.then(|| prompt.to_owned());
-        if let Err(why) = self.call(Op::Resume { session: session.to_owned(), carry_on }).await {
+        // Asked apart from its follow, so only a refusal puts the marks back.
+        if let Err(why) = self.ask(Op::Resume { session: session.to_owned(), carry_on }).await {
             if let Err(e) = mark(carry_ons, cut, false).await {
                 eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
             }
             return Err(why);
         }
+        // Taken: the session starts again whether or not this watch is set up, and the next connect follows it, so a
+        // failed follow leaves it marked as starting and the message is sent all the same.
         let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
-        self.follow(session, follow.seq).await?;
+        if let Err(e) = self.follow(session, follow.seq).await {
+            eprintln!("couldn't follow session {session} after its resume; the next connect follows it: {e}");
+        }
         if !counted {
             self.send(session, prompt).await?;
         }
