@@ -23,7 +23,7 @@ pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
-pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again once the run is going.";
+pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again if the run starts working again, or ask Pip to start it again.";
 pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
 pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
@@ -367,10 +367,9 @@ fn signing_refused(said: &str) -> bool {
 /// Whether a shell call's command runs `git commit`, past git's own options (`git -C dir -c key=value commit`).
 fn runs_git_commit(input: &Value) -> bool {
     let Some(command) = input.get("command").and_then(Value::as_str) else { return false };
-    command.split(['\n', ';', '&', '|']).any(|part| {
-        // Quote-aware words, so a quoted `-C` folder is one word, and `bash -c "git commit …"` is seen too.
-        let quoted = super::shell::words(part);
-        let mut words = quoted.iter().map(String::as_str).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
+    // Split as the shell splits it, so a quoted `-C` folder is one word, and `bash -c "git commit …"` is seen too.
+    super::shell::commands(command).iter().any(|words| {
+        let mut words = words.iter().map(String::as_str).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
         while let Some(word) = words.next() {
             match word {
                 "-c" | "-C" => {

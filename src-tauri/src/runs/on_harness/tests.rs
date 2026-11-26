@@ -1138,7 +1138,9 @@ async fn clean_up_waits_for_a_message_that_holds_the_launch_lock_before_it_stops
         let (rig, id) = (rig.clone(), run.id.clone());
         async move { rig.svc.cleanup(&id).await }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // A clean-up takes about a second here: one that has not finished after three waits for the lock.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(!cleaning.is_finished(), "Clean up waits while the message holds the lock");
     assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "nothing is stopped while the message holds the lock");
     drop(held);
     assert_eq!(cleaning.await.unwrap().unwrap(), crate::runs::cleanup::Cleanup::Removed);
@@ -1196,4 +1198,107 @@ async fn a_take_back_whose_session_ends_before_the_call_returns_is_not_left_star
     .await
     .expect("its new start ended");
     assert!(!ended.taken_back, "the mark set before the call is cleared by the end the call's watch applied");
+}
+
+const FINISHES_THEN_WORKS_LONG: &str = r#"{"prompt": null}
+{"say": "Looking at the cart."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Back again."}
+{"sleep": 600000}
+{"end": "done"}"#;
+
+#[tokio::test]
+async fn clean_up_leaves_a_run_a_message_set_working_while_clean_up_waited_for_the_lock() {
+    let (_repo, _served, git, rig) = shared(FINISHES_THEN_WORKS_LONG).await;
+    let rig = Arc::new(rig);
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    // The lock is fair: the message takes it first, and Clean up, which waited behind it, reads what the message did.
+    let held = rig.svc.launching.clone().lock_owned().await;
+    let messaging = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.message_agent(&id, "Make it darker.", crate::domain::Actor::Person).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let cleaning = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.cleanup(&id).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    drop(held);
+    messaging.await.unwrap().unwrap();
+    let crate::runs::cleanup::Cleanup::Refused { message } = cleaning.await.unwrap().unwrap() else { panic!("refused") };
+    assert_eq!(message, WORKING_AGAIN);
+    let back = until_detail(&rig, &run, "Back again.").await;
+    assert_eq!(back.state, RunState::Working, "the agent was left running");
+    assert!(back.worktree_removed_at.is_none() && git.worktree(&done.spec.name).is_dir());
+}
+
+#[tokio::test]
+async fn clean_up_leaves_a_run_whose_session_the_harness_has_more_of_than_the_app_has_read() {
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    // As the app reads it before it has applied the harness's last event.
+    rig.fx.core.apply_session(&session, |_, follow| {
+        follow.seq -= 1;
+        Vec::new()
+    }).await.unwrap();
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert_eq!(message, WORKING_AGAIN);
+    assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "the agent was left running");
+    assert!(git.worktree(&done.spec.name).is_dir());
+}
+
+#[tokio::test]
+async fn clean_up_of_a_run_with_changes_not_committed_is_refused_before_its_agent_is_stopped() {
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    std::fs::write(done.expected_worktree.join("draft.txt"), "not yet").unwrap();
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert_eq!(message, "Nothing was removed: the worktree has changes that are not committed");
+    assert!(!rig.fx.core.session_run(&done.harness_session.unwrap()).await.unwrap().unwrap().1.closed, "the agent was not stopped");
+    assert!(git.worktree(&done.spec.name).is_dir());
+}
+
+#[tokio::test]
+async fn clean_up_that_cannot_ask_git_leaves_the_agent_running_and_says_so() {
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    // A clone outside the work folder is one git is not asked about.
+    let elsewhere = tempfile::tempdir().unwrap();
+    rig.set(&done, |r| r.spec.clone_path = elsewhere.path().join("webshop")).await;
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert!(message.starts_with(&format!("{UNCHECKED}: ")) && message.ends_with("Try again in a moment."), "{message}");
+    assert!(!rig.fx.core.session_run(&done.harness_session.unwrap()).await.unwrap().unwrap().1.closed, "the agent was left running");
+    assert!(git.worktree(&done.spec.name).is_dir());
+}
+
+#[tokio::test]
+async fn clean_up_of_a_closed_session_the_harness_refuses_says_why_in_a_sentence_and_how_to_remove_the_setting() {
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    let link = rig.svc.harness.as_ref().unwrap().link.clone();
+    let mut applied = link.applied();
+    link.stop(&session).await.unwrap();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the session closed");
+    git.run(&done.spec.clone_path, &["config", "commit.gpgsign", "false"]);
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert!(!message.to_lowercase().starts_with("refused") && message.starts_with(char::is_uppercase), "the harness's kind is taken off: {message}");
+    assert!(message.contains("(commit.gpgsign)"), "{message}");
+    let way_out = format!(". Remove it with `git -C {} config --unset-all commit.gpgsign`.", crate::runs::shell::quote(&done.spec.clone_path.display().to_string()));
+    assert!(message.ends_with(&way_out) && !message.contains(".."), "{message}");
+    assert!(git.worktree(&done.spec.name).is_dir());
 }

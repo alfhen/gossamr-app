@@ -546,3 +546,22 @@ fn a_refused_signature_with_a_quoted_folder_before_commit_is_seen() {
     p.play(started()).play([bash("t1", "git -C \"/work/a b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
     assert_eq!(p.run.state, RunState::Failed);
 }
+
+#[test]
+fn a_command_that_only_quotes_git_commit_does_not_clear_a_refused_signature() {
+    let mut p = Played::new();
+    p.play(started()).play([
+        bash("t1", "git commit -m fix"),
+        Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true },
+        bash("t2", "echo 'git commit -m fix'"),
+        Body::ToolResult { id: "t2".into(), output: json!("git commit -m fix"), error: false },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!((p.run.state, p.run.failure), (RunState::Failed, Some(RunFailure::SigningNeedsYou)));
+    let mut escaped = Played::new();
+    escaped.play(started()).play([bash("t1", "git -C /work/a\\ b/repo commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(escaped.run.state, RunState::Failed, "an escaped space in the folder");
+    let mut separated = Played::new();
+    separated.play(started()).play([bash("t1", "git -C \"/work/a & b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(separated.run.state, RunState::Failed, "a quoted separator in the folder");
+}

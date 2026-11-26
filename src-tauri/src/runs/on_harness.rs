@@ -44,6 +44,9 @@ const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30
 const INTERRUPTED_ROW: &str = "Stopped when Gossamr moved agents to the harness. Ask Pip to start it again.";
 const INTERRUPTED_ASKING: &str = "Stopped when Gossamr moved agents to the harness, before you answered its question. Ask Pip to start it again.";
 
+/// Why Clean up leaves a run whose session did something after git was asked, as a turn a message started.
+const WORKING_AGAIN: &str = "It started working again, so it is not cleaned up. Clean it up once it is done.";
+
 /// Why Clean up leaves a session running: it could not first ask what git would keep.
 const UNCHECKED: &str = "Gossamr couldn't check this run's work before stopping its agent, so it left it running";
 
@@ -56,7 +59,7 @@ pub const HAND_OVER_IN_TURN: &str = "Its agent is in the middle of a turn, and o
 /// A clean-up refusal, with how to remove the clone's settings when they are why: the clone note says the same.
 fn with_way_out(refusal: &str, run: &Run) -> String {
     match super::service::fresh::clone_settings_way_out(refusal, &run.spec.clone_path) {
-        Some(out) => format!("{refusal} {out}"),
+        Some(out) => format!("{}. {out}", refusal.trim_end_matches('.')),
         None => refusal.to_owned(),
     }
 }
@@ -359,12 +362,12 @@ impl RunService {
     /// a run not on the harness; `Some(Ok(Some(why)))` for a refusal.
     pub(super) async fn cleanup_on_harness(&self, run: &Run) -> Option<Result<Option<String>>> {
         let (link, session) = self.on_harness_of(run)?;
-        // As a message holds it for its send: no turn a message starts can be cut by the stop below.
-        let _turn = self.launching.lock().await;
         let closed = |follow: &crate::domain::SessionFollow| follow.closed;
-        let open = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if !closed(&follow));
+        let follow = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow);
+        let open = follow.as_ref().is_some_and(|follow| !closed(follow));
         // Asked before the close: a refusal after it would have stopped the agent for nothing. A run whose branch the app
         // doesn't know yet asks the harness's listing for it; one whose session names no repo has no worktree to keep.
+        // Not under the launch lock, since git may fetch for up to 30 s and every launch, message and answer waits on it.
         if open {
             let work = match run.branch.clone() {
                 Some(branch) => Some((branch, run.expected_worktree.clone())),
@@ -382,19 +385,31 @@ impl RunService {
             }
         }
         if open {
-            let mut applied = link.applied();
-            if let Err(why) = link.stop(session).await {
-                return Some(Ok(Some(format!("The harness didn't close the session first: {why}"))));
-            }
-            let waited = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
-                while !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if closed(&follow)) {
-                    if applied.changed().await.is_err() {
-                        return;
-                    }
+            // As a message holds it for its send: no turn a message starts can be cut by the stop below.
+            let _turn = self.launching.lock().await;
+            let now = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow);
+            if let Some(now) = now.filter(|now| !closed(now)) {
+                // Anything the session did since git was asked, as a turn a message started while Clean up waited for
+                // the lock, shows in the follow, or only in the harness's events the app has not read yet.
+                let seen = follow.as_ref().map_or(0, |follow| follow.seq);
+                let unread = link.listed(session).await.is_some_and(|row| row["last_seq"].as_u64().unwrap_or(0) > now.seq);
+                if now.in_turn || now.seq > seen || unread {
+                    return Some(Ok(Some(WORKING_AGAIN.into())));
                 }
-            });
-            if waited.await.is_err() {
-                return Some(Ok(Some("The session hasn't closed yet, so it can't be cleaned up. Try again in a moment.".into())));
+                let mut applied = link.applied();
+                if let Err(why) = link.stop(session).await {
+                    return Some(Ok(Some(format!("The harness didn't close the session first: {why}"))));
+                }
+                let waited = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
+                    while !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if closed(&follow)) {
+                        if applied.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                if waited.await.is_err() {
+                    return Some(Ok(Some("The session hasn't closed yet, so it can't be cleaned up. Try again in a moment.".into())));
+                }
             }
         }
         Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| with_way_out(&plain_refusal(&why), run))))

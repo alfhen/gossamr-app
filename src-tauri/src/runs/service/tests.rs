@@ -1170,6 +1170,12 @@ mod clones {
             crate::runs::service::fresh::clone_settings_way_out(cut, clone).as_deref(),
             Some("Remove it with `git -C '/w/acme/webshop' config --unset-all a.one`, and find those shown with `*` and the 2 more with `git -C '/w/acme/webshop' config --list --show-origin`.")
         );
+        let cut_plain = "the clone has settings Gossamr didn't make (a.one, and 3 more), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(cut_plain, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all a.one`, and find the 3 more with `git -C '/w/acme/webshop' config --list --show-origin`."),
+            "a list cut with no `*` key"
+        );
     }
 
     #[tokio::test]
