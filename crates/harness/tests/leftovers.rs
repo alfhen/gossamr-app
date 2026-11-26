@@ -200,11 +200,13 @@ fn leftover_a_pid_that_another_process_took_is_never_signalled() {
     assert_eq!(ended(child), Some(libc::SIGTERM), "nothing else ended it");
 }
 
-#[test]
-fn leftover_given_up_with_no_agent_on_record_stays_given_up() {
+#[tokio::test]
+async fn leftover_given_up_with_no_agent_on_record_stays_given_up_and_says_there_is_no_way_back() {
     let (_tmp, dir) = data_dir();
     left_by_a_shutdown(&dir, None);
     let harness = started_harness(&dir);
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("no record of its process to check, so it is never resumed: open a new session for its work"), "{refused}");
     assert_eq!(row(harness, &dir), (true, vec![]), "nothing says its agent is gone");
 }
 
@@ -480,14 +482,13 @@ async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_
     left_in(&dir, Some(&leader), &worktree(&dir));
     let harness = started_harness(&dir);
     // What holds it and what to do, on its row and in each refusal; no shutdown is named, as none happened.
-    // Its leader is gone, so the group's id may be another's by now: it is not named for the person to end.
-    let holds = "a process in session s's group may still run (a process in its group works outside the session's worktree)";
+    // Its leader is gone and no process has its pid, so the group is still the agent's: named by its id.
+    let holds = format!("a process in session s's process group {} may still run (a process in its group works outside the session's worktree)", leader.pid);
     let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
-    assert!(listed.contains(holds) && listed.ends_with("so it is not resumed: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"), "{listed}");
+    assert!(listed.contains(&holds) && listed.ends_with("so it is not resumed: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"), "{listed}");
     for refused in [harness.resume("s").await.err(), harness.take_back("s").await.err(), harness.clean_up("s").await.err()] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(holds) && refused.ends_with("in Settings > Harness, to check again"), "{refused}");
-        assert!(!refused.contains(&leader.pid.to_string()), "no pid named: {refused}");
+        assert!(refused.contains(&holds) && refused.ends_with("in Settings > Harness, to check again"), "{refused}");
     }
     assert!(process::alive(&work), "checked again, still not the harness's to kill");
     kill(&work);
@@ -694,7 +695,7 @@ async fn leftover_whose_giving_up_cannot_be_written_holds_every_resume_until_it_
     }
     sql(&dir, "DROP TRIGGER no_giving_up");
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains("a process in session s's group may still run"), "{refused}");
+    assert!(refused.contains(&format!("a process in session s's process group {} may still run", leader.pid)), "{refused}");
     assert!(is_given_up(&dir));
     assert!(process::alive(&work), "never signalled");
     kill(&work);
@@ -784,16 +785,92 @@ fn leftover_whose_group_lists_only_an_exited_process_twice_but_still_answers_whe
 }
 
 #[tokio::test]
+async fn leftover_whose_end_cannot_be_written_is_kept_on_record_with_no_half_end_and_ended_once_it_can() {
+    let (_tmp, dir) = data_dir();
+    left_by_a_crash(&dir, &Process { pid: 4242, started: 7 });
+    sql(&dir, "UPDATE sessions SET agent_boot = 'another boot' WHERE id = 's'");
+    // The store takes the `failed` but refuses the `closed`.
+    sql(&dir, "CREATE TRIGGER no_closed BEFORE INSERT ON events WHEN NEW.type = 'closed' BEGIN SELECT RAISE(FAIL, 'no'); END");
+    let harness = started_harness(&dir);
+    assert!(harness.events("s", 0).unwrap().is_empty(), "neither half of its end");
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
+    sql(&dir, "DROP TRIGGER no_closed");
+    let _ = harness.resume("s").await;
+    let said: Vec<Body> = harness.events("s", 0).unwrap().into_iter().map(|event| event.body).collect();
+    assert!(ended_by_the_next_harness(&said, "the agent was gone too"), "{said:?}");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+/// An agent whose leader is gone as soon as it starts, leaving its work in its group; its output closes at once.
+#[derive(Default, Clone)]
+struct Leaver {
+    left: Arc<Mutex<Vec<Work>>>,
+}
+
+impl Driver for Leaver {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let (leader, work) = a_leader_gone_with_its_work_left(&launch.cwd);
+        self.left.lock().unwrap().push(work);
+        let (commands, _) = tokio::sync::mpsc::unbounded_channel();
+        let (output, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: format!("leaver-{}", leader.pid), resumed: false });
+        Ok(Link { commands, output: receiver, process: Some(leader) })
+    }
+}
+
+#[tokio::test]
+async fn leftover_an_agent_that_ends_with_its_group_still_running_stays_on_record_until_a_recheck_finds_it_gone() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    let (id, mut events) = harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.unwrap();
+    closed(&mut events).await;
+    let listed = harness.sessions().unwrap().into_iter().find(|session| session.id == id).and_then(|session| session.given_up).unwrap_or_default();
+    assert!(listed.contains("its agent ended, but its process group still answered when its session closed"), "{listed}");
+    // A resume checks it again, and its group is still not the harness's to stop.
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("may still run"), "{refused}");
+    let work = leaver.left.lock().unwrap().remove(0);
+    assert!(process::alive(&work), "never signalled");
+    kill(&work);
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("may still run"), "freed once its group is gone: {refused}");
+    harness.close(&id).unwrap_or_default();
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
+}
+
+#[test]
+fn leftover_sent_its_kill_waits_for_a_process_that_refuses_signals_as_one_that_may_still_run() {
+    // As a command the agent ran with sudo: gone or not, it answers that it may not be signalled.
+    let (_tmp, dir) = data_dir();
+    let (child, agent) = agent();
+    left_by_a_crash(&dir, &agent);
+    process::seam::refuse_signals_from(agent.pid);
+    let harness = started_harness(&dir);
+    assert_eq!(ended(child), Some(libc::SIGKILL), "sent its kill");
+    let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
+    assert!(listed.contains("it was sent a kill and had not ended when last checked"), "waited for it, and kept: {listed}");
+}
+
+#[tokio::test]
 async fn leftover_kept_is_not_handed_over_and_each_call_says_what_keeps_it() {
     let (_tmp, dir) = data_dir();
     left_by_a_shutdown(&dir, None);
     let harness = started_harness(&dir);
     let keeps = "session s's agent may still run (a shutdown stopped waiting for it)";
     let refused = harness.hand_over("s").err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains(keeps) && refused.ends_with("so it is not handed over"), "{refused}");
+    // With no record to check, nothing frees it (m17): each refusal says so.
+    assert!(refused.contains(keeps) && refused.ends_with("so it is never handed over: open a new session for its work"), "{refused}");
     for (refused, what) in [(harness.resume("s").await.err(), "resumed"), (harness.clean_up("s").await.err(), "cleaned up")] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(keeps) && refused.contains(&format!("so it is not {what}")), "{refused}");
+        assert!(refused.contains(keeps) && refused.contains(&format!("so it is never {what}")), "{refused}");
     }
     drop(harness);
     assert!(!opened(&dir).session("s").unwrap().handed_over && !said(&dir).contains(&Body::HandedOver), "not marked handed over");
@@ -809,8 +886,44 @@ async fn leftover_kept_after_a_hand_over_is_not_taken_back_or_cleaned_up_and_say
     let keeps = "session s's agent may still run (a shutdown stopped waiting for it)";
     for (refused, what) in [(harness.take_back("s").await.err(), "taken back"), (harness.clean_up("s").await.err(), "cleaned up")] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(keeps) && refused.contains(&format!("so it is not {what}")), "{refused}");
+        assert!(refused.contains(keeps) && refused.contains(&format!("so it is never {what}")), "{refused}");
     }
     drop(harness);
     assert!(opened(&dir).session("s").unwrap().handed_over, "still handed over");
+}
+
+#[tokio::test]
+async fn leftover_an_agent_that_ends_with_its_group_running_and_whose_hold_cannot_be_written_holds_every_resume() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    sql(&dir, "CREATE TRIGGER no_giving_up BEFORE UPDATE OF given_up ON sessions WHEN NEW.given_up = 1 BEGIN SELECT RAISE(FAIL, 'no'); END");
+    let (id, mut events) = harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.unwrap();
+    closed(&mut events).await;
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    // Held: that resume checked again, and the store still could not record what it found.
+    assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
+    // Once the store takes it, the check writes the hold, and the session is given up on.
+    sql(&dir, "DROP TRIGGER no_giving_up");
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("may still run"), "{refused}");
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
+}
+
+#[tokio::test]
+async fn leftover_a_start_whose_agent_was_never_recorded_and_whose_group_outlives_it_stays_taken_until_a_shutdown_gives_it_up() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    // Nothing can record its agent: not at its start, and not when its group outlives it.
+    sql(&dir, "CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions WHEN NEW.agent_pid IS NOT NULL BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    assert!(harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.is_err());
+    let id = harness.sessions().unwrap().into_iter().next().expect("the session's row").id;
+    let left = tokio::time::timeout(Duration::from_secs(10), harness.shutdown()).await.expect("shutdown does not wait for ever");
+    assert_eq!(left, [id], "still taken when the shutdown came, and given up on by it");
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
 }

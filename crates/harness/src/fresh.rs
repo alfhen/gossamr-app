@@ -300,7 +300,7 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
 }
 
 /// `path` as one shell word, so a command the person copies works with a space or a quote in it.
-fn quoted(path: &Path) -> String {
+pub(crate) fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 

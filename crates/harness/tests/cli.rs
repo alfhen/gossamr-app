@@ -123,6 +123,11 @@ impl Drop for Serving {
 }
 
 fn serve(script: &str) -> Serving {
+    serve_with(script, &[])
+}
+
+/// As `serve`, with `extra` on its command line.
+fn serve_with(script: &str, extra: &[&str]) -> Serving {
     use std::io::{BufRead, Write};
     let tmp = tempfile::tempdir().unwrap();
     let (dir, path) = (tmp.path().join("d"), tmp.path().join("script.jsonl"));
@@ -130,6 +135,7 @@ fn serve(script: &str) -> Serving {
     let token = harness::auth::Token::random().hex();
     let mut child = Command::new(HARNESS)
         .args(["serve".as_ref(), "--data".as_ref(), dir.as_os_str(), "--mock-script".as_ref(), path.as_os_str()])
+        .args(extra)
         .env_remove("HARNESS_DATA")
         .env_remove(harness::cli::TOKEN_VARIABLE)
         .stdin(std::process::Stdio::piped())
@@ -593,4 +599,48 @@ fn serve_takes_a_turn_limit_of_one_or_more() {
     for bad in [["serve", "--turn-limit", "0"], ["serve", "--turn-limit", "many"]] {
         assert!(matches!(parse(&bad), harness::Request::Usage), "{bad:?}");
     }
+}
+
+#[test]
+fn serve_runs_with_the_turn_limit_its_command_line_gives() {
+    // What the second session says before its turn starts, with `serve` at `limit`, while the first holds a turn.
+    let second_says = |limit: &[&str]| {
+        let serving = serve_with(WAITS, limit);
+        let mut first = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
+        give_token(&mut first, &serving.token);
+        let held = first_of(first.stdout.take().unwrap(), &["permission"]);
+        let mut second = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
+        give_token(&mut second, &serving.token);
+        let said = held.and_then(|_| first_of(second.stdout.take().unwrap(), &["waiting", "turn_started"]));
+        for mut child in [first, second] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        said.unwrap_or_else(|seen| panic!("no such event within 30 s; seen: {seen:?}"))
+    };
+    assert_eq!(second_says(&["--turn-limit", "1"]), "waiting", "one turn at a time");
+    assert_eq!(second_says(&[]), "turn_started", "the default lets a second run");
+}
+
+/// The type of the first event on `stdout` whose type is one of `types`, within 30 s; else the types seen.
+fn first_of(stdout: std::process::ChildStdout, types: &[&str]) -> Result<String, Vec<String>> {
+    use std::io::BufRead;
+    let (lines, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut seen = vec![];
+    while let Ok(line) = read.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        let kind = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|event| event["type"].as_str().map(str::to_owned)).unwrap_or(line);
+        if types.contains(&kind.as_str()) {
+            return Ok(kind);
+        }
+        seen.push(kind);
+    }
+    Err(seen)
 }

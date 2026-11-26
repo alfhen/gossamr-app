@@ -115,10 +115,16 @@ impl Setup {
         Error::Refused(self.masked(&e.to_string()))
     }
 
-    /// `text` with the home folder written `~`, so a refusal names the rule and not the person's paths.
+    /// `text` with the home folder written `~`, so a refusal names the rule and not the person's paths. A path quoted
+    /// for a shell gets its `~/` before the quote, where the shell still expands it.
     pub fn masked(&self, text: &str) -> String {
         match &self.home {
-            Some(home) => text.replace(&*home.to_string_lossy(), "~"),
+            Some(home) => {
+                let home = home.to_string_lossy();
+                // As `fresh::quoted` writes it, a quote in the path closed, escaped and opened again.
+                let quoted = home.replace('\'', "'\\''");
+                text.replace(&format!("'{quoted}/"), "~/'").replace(&format!("'{quoted}'"), "~").replace(&*quoted, "~").replace(&*home, "~")
+            }
             None => text.to_owned(),
         }
     }
@@ -300,6 +306,20 @@ fn work_home_refusal(value: Option<std::ffi::OsString>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_masked_command_for_the_person_still_runs_in_a_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().canonicalize().unwrap().join("o'brien home");
+        let clone = home.join("Gossamr agents").join("it's");
+        std::fs::create_dir_all(&clone).unwrap();
+        let setup = Setup::new(Some(home.clone()), home.join("data"));
+        let command = setup.masked(&format!("cd {} && pwd", crate::fresh::quoted(&clone)));
+        assert!(command.starts_with("cd ~/'Gossamr agents/it"), "the home folder is outside the quotes: {command}");
+        assert!(!command.contains("brien"), "no part of the home folder is left: {command}");
+        let ran = std::process::Command::new("/bin/sh").args(["-c", &command]).env("HOME", &home).output().unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    }
 
     #[test]
     fn serve_is_refused_a_work_home_that_names_no_folder() {
