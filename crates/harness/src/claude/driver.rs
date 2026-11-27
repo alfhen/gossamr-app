@@ -383,10 +383,15 @@ pub struct Stream {
     permissions: Option<Permissions>,
     /// What the next `init` is checked against: set at the start and at each switch, cleared once checked.
     unchecked: Option<Permissions>,
-    /// Each `set_permission_mode` request not yet answered, oldest first, with the mode it asked for.
-    switches: VecDeque<(String, Permissions)>,
+    /// Each `set_permission_mode` request not yet answered, oldest first, with the mode it asked for and its number.
+    switches: VecDeque<(String, Permissions, u64)>,
     /// The mode Claude last confirmed: the start's, then each switch it took. A refusal falls back to it.
     confirmed: Option<Permissions>,
+    /// That mode as Claude named it, for a notice; None until `init` or a switch names one.
+    confirmed_mode: Option<String>,
+    /// The number of the last switch whose success was taken: Claude applies switches in the order sent, so a success
+    /// for an earlier one, should it come late, says nothing of the mode it runs in now.
+    taken: u64,
     /// The cost Claude's last `result` gave, a running total, for a `result` that does not say its turn's own.
     cost_so_far: f64,
 }
@@ -509,8 +514,8 @@ impl Stream {
         let (waiting, servers, setup) = (Some(vec![]), None, None);
         let (locked, refused) = (None, false);
         let cost_so_far = 0.0;
-        let (permissions, unchecked, switches, confirmed) = (None, None, VecDeque::new(), None);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, permissions, unchecked, switches, confirmed, cost_so_far }
+        let (permissions, unchecked, switches, confirmed, confirmed_mode, taken) = (None, None, VecDeque::new(), None, None, 0);
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, permissions, unchecked, switches, confirmed, confirmed_mode, taken, cost_so_far }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -573,7 +578,7 @@ impl Stream {
         // Nothing to send when the mode Claude will be in is the one chosen: the last switch's, or with none waiting,
         // the one it confirmed. An unknown mode always sends.
         let expected = match self.switches.back() {
-            Some((_, last)) => Some(*last),
+            Some((_, last, _)) => Some(*last),
             None => self.confirmed,
         };
         if expected == Some(permissions) {
@@ -582,7 +587,7 @@ impl Stream {
         self.permissions = Some(permissions);
         self.unchecked = Some(permissions);
         self.request(json!({"subtype": "set_permission_mode", "mode": mode_of(permissions)}));
-        self.switches.push_back((format!("gossamr-{}", self.requests), permissions));
+        self.switches.push_back((format!("gossamr-{}", self.requests), permissions, self.requests));
     }
 
     /// Claude's answer to one switch. A mode it took is the confirmed one; while a later switch waits for its own
@@ -590,23 +595,31 @@ impl Stream {
     /// is told when it is not the one asked for.
     fn switched(&mut self, line: &Value) {
         let id = &line["response"]["request_id"];
-        let Some(at) = self.switches.iter().position(|(sent, _)| id == sent.as_str()) else { return };
-        let (_, asked) = self.switches.remove(at).expect("found");
+        let Some(at) = self.switches.iter().position(|(sent, ..)| id == sent.as_str()) else { return };
+        let (_, asked, number) = self.switches.remove(at).expect("found");
         let asked_mode = mode_of(asked);
         if line["response"]["subtype"] == "success" {
-            // Claude echoes the mode it took (2.1.331).
-            let took = line["response"]["response"]["mode"].as_str().unwrap_or(asked_mode);
-            self.confirmed = confirmed_of(took);
-            if took != asked_mode {
-                self.emit(Body::Notice { text: format!("Claude switched this agent to {} mode, not {} mode.", named(took), named(asked_mode)) });
+            // Claude echoes the mode it took (2.1.331). A later switch already taken is the mode it runs in now.
+            if number < self.taken {
+                return;
             }
+            let took = line["response"]["response"]["mode"].as_str().unwrap_or(asked_mode).to_owned();
+            self.taken = number;
+            self.confirmed = confirmed_of(&took);
+            if took != asked_mode {
+                self.emit(Body::Notice { text: format!("Claude switched this agent to {} mode, not {} mode.", named(&took), named(asked_mode)) });
+            }
+            self.confirmed_mode = Some(took);
         } else {
             let why = line["response"]["error"].as_str().unwrap_or("no reason given");
-            // Left in Auto after you chose Ask is the case that matters: say outright that steps still run unasked.
-            let text = match (self.switches.is_empty(), self.confirmed) {
-                (true, Some(Permissions::Auto)) => format!("Claude didn't switch this agent to {} mode ({why}). It still runs in Auto mode, so steps may run without asking you.", named(asked_mode)),
-                (true, confirmed) => format!("Claude didn't switch this agent to {} mode ({why}), so it goes on in {} mode.", named(asked_mode), named(confirmed.map_or("", mode_of))),
-                (false, _) => format!("Claude didn't switch this agent to {} mode ({why}).", named(asked_mode)),
+            let refused = format!("Claude didn't switch this agent to {} mode ({why})", named(asked_mode));
+            let kept = self.confirmed_mode.clone().or_else(|| self.confirmed.map(|confirmed| mode_of(confirmed).to_owned()));
+            // Left in a mode that runs steps unasked after you chose otherwise is the case that matters: say so outright.
+            let text = match (self.switches.is_empty(), kept.as_deref()) {
+                (false, _) => format!("{refused}."),
+                (true, Some(mode @ ("auto" | "acceptEdits" | "bypassPermissions"))) => format!("{refused}. It still runs in {} mode, so steps may run without asking you.", named(mode)),
+                (true, Some(mode)) => format!("{refused}, so it goes on in {} mode.", named(mode)),
+                (true, None) => format!("{refused}, and Claude hasn't said which mode it runs in."),
             };
             self.emit(Body::Notice { text });
         }
@@ -711,6 +724,7 @@ impl Stream {
                     && let Some(mode) = line["permissionMode"].as_str()
                 {
                     self.confirmed = confirmed_of(mode);
+                    self.confirmed_mode = Some(mode.to_owned());
                 }
                 if let Some(asked) = self.unchecked
                     && let Some(mode) = line["permissionMode"].as_str()
@@ -745,7 +759,7 @@ impl Stream {
             }
             // A setup answer, success or not: Claude reads the rest either way and reports what fails.
             Some("control_response") if self.setup.as_ref().is_some_and(|(id, _)| line["response"]["request_id"] == id.as_str()) => self.set_up(&line),
-            Some("control_response") if self.switches.iter().any(|(id, _)| line["response"]["request_id"] == id.as_str()) => self.switched(&line),
+            Some("control_response") if self.switches.iter().any(|(id, ..)| line["response"]["request_id"] == id.as_str()) => self.switched(&line),
             Some("control_request") => self.asks(&line),
             Some("control_cancel_request") => {
                 if let Some(id) = line["request_id"].as_str()
@@ -1217,6 +1231,45 @@ mod tests {
         let sent: Vec<Value> = w.sent().into_iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").collect();
         assert_eq!(sent.len(), 1, "init said Manual");
         assert_eq!(sent[0]["request"]["mode"], "auto");
+    }
+
+    #[test]
+    fn a_success_for_an_earlier_switch_that_comes_after_a_later_ones_says_nothing_of_the_mode_now() {
+        let mut w = wire();
+        (w.stream.permissions, w.stream.unchecked, w.stream.confirmed) = (Some(Permissions::Auto), None, Some(Permissions::Auto));
+        w.sent();
+        w.stream.set_permissions(Permissions::Ask);
+        w.stream.set_permissions(Permissions::Auto);
+        let ids: Vec<String> = w.sent().into_iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").map(|line| line["request_id"].as_str().unwrap().to_owned()).collect();
+        let took = |w: &mut Wire, id: &str, mode: &str| w.agent(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"mode": mode}}}));
+        took(&mut w, &ids[1], "auto");
+        took(&mut w, &ids[0], "default");
+        assert!(w.said().is_empty());
+        assert_eq!((w.stream.permissions, w.stream.confirmed), (Some(Permissions::Auto), Some(Permissions::Auto)), "Claude applied Ask, then Auto");
+        w.stream.set_permissions(Permissions::Ask);
+        assert_eq!(w.sent().iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").count(), 1, "so a later Ask is sent");
+    }
+
+    #[test]
+    fn a_refusal_names_the_mode_claude_named_and_says_outright_when_it_runs_steps_unasked() {
+        let refusal = |init_mode: Option<&str>| {
+            let mut w = wire();
+            (w.stream.permissions, w.stream.unchecked, w.stream.confirmed) = (Some(Permissions::Ask), None, Some(Permissions::Ask));
+            if let Some(mode) = init_mode {
+                w.stream.prompt("go".into());
+                w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "permissionMode": mode}));
+            }
+            w.said();
+            w.sent();
+            w.stream.set_permissions(Permissions::Auto);
+            let id = w.sent().into_iter().find(|line| line["request"]["subtype"] == "set_permission_mode").unwrap()["request_id"].as_str().unwrap().to_owned();
+            w.agent(json!({"type": "control_response", "response": {"subtype": "error", "request_id": id, "error": "busy"}}));
+            w.said()
+        };
+        let notice = |text: &str| vec![Body::Notice { text: text.into() }];
+        assert_eq!(refusal(Some("bypassPermissions")), notice("Claude didn't switch this agent to Auto mode (busy). It still runs in Bypass permissions mode, so steps may run without asking you."));
+        assert_eq!(refusal(Some("plan")), notice("Claude didn't switch this agent to Auto mode (busy), so it goes on in Plan mode."));
+        assert_eq!(refusal(None), notice("Claude didn't switch this agent to Auto mode (busy), so it goes on in Manual mode."), "the start's own");
     }
 
     #[test]
