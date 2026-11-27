@@ -1901,6 +1901,13 @@ impl Task {
         if stopped {
             self.wait_until_gone(&mut link, caps, turn).await;
         }
+        // A tree the driver sent as its output closed, which neither loop read once it saw the close.
+        if let Some(noted) = link.tree.as_mut()
+            && noted.has_changed().unwrap_or(true)
+        {
+            let tree = noted.borrow_and_update().clone();
+            self.keep_tree(&tree);
+        }
         drop(slot);
         // A job a command sent to the background and left may run on in no tree or group the driver noted.
         if let Ok(Some(crate::store::Recorded { agent, worktree, .. })) = self.inner.with_store(|store| store.agent(&self.id)) {
