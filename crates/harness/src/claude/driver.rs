@@ -588,9 +588,11 @@ impl Stream {
             }
         } else {
             let why = line["response"]["error"].as_str().unwrap_or("no reason given");
-            let text = match self.switches.is_empty() {
-                true => format!("Claude didn't switch this agent to {} mode ({why}), so it goes on in {} mode.", named(asked_mode), named(self.confirmed.map_or("", mode_of))),
-                false => format!("Claude didn't switch this agent to {} mode ({why}).", named(asked_mode)),
+            // Left in Auto after you chose Ask is the case that matters: say outright that steps still run unasked.
+            let text = match (self.switches.is_empty(), self.confirmed) {
+                (true, Some(Permissions::Auto)) => format!("Claude didn't switch this agent to {} mode ({why}). It still runs in Auto mode, so steps may run without asking you.", named(asked_mode)),
+                (true, confirmed) => format!("Claude didn't switch this agent to {} mode ({why}), so it goes on in {} mode.", named(asked_mode), named(confirmed.map_or("", mode_of))),
+                (false, _) => format!("Claude didn't switch this agent to {} mode ({why}).", named(asked_mode)),
             };
             self.emit(Body::Notice { text });
         }
@@ -1143,7 +1145,7 @@ mod tests {
         assert_eq!(w.said(), [Body::Notice { text: "Claude didn't switch this agent to Manual mode (busy).".into() }], "a later switch still waits");
         assert_eq!(w.stream.permissions, Some(Permissions::Auto), "the latest asked for, until its answer");
         answer(&mut w, &ids[1], false);
-        assert_eq!(w.said(), [Body::Notice { text: "Claude didn't switch this agent to Auto mode (busy), so it goes on in Auto mode.".into() }]);
+        assert_eq!(w.said(), [Body::Notice { text: "Claude didn't switch this agent to Auto mode (busy). It still runs in Auto mode, so steps may run without asking you.".into() }]);
         assert_eq!(w.stream.permissions, Some(Permissions::Auto), "the mode Claude last confirmed, not the earlier switch's");
         w.stream.set_permissions(Permissions::Ask);
         assert_eq!(switch_ids(&mut w).len(), 1, "a later Ask is sent");
@@ -1157,7 +1159,7 @@ mod tests {
         answer(&mut w, &ids[0], true);
         assert!(w.said().is_empty());
         answer(&mut w, &ids[1], false);
-        assert_eq!(w.said(), [Body::Notice { text: "Claude didn't switch this agent to Manual mode (busy), so it goes on in Auto mode.".into() }]);
+        assert_eq!(w.said(), [Body::Notice { text: "Claude didn't switch this agent to Manual mode (busy). It still runs in Auto mode, so steps may run without asking you.".into() }], "the unsafe way round, said outright");
         assert_eq!(w.stream.permissions, Some(Permissions::Auto), "the one it took");
         // An earlier switch refused while a later one waits leaves the later one's mode, though it differs.
         let mut w = wire();
