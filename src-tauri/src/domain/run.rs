@@ -755,6 +755,16 @@ fn first_pass() -> u32 {
 }
 
 /// How far the app has followed a run's harness session: the last event it applied, and what those events left open.
+/// What a run read before its session was resumed, put back when the resume's first prompt is dropped.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeforeResume {
+    pub state: RunState,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub failure: Option<RunFailure>,
+}
+
 /// Kept beside the run and written with it, so an event is applied once, and a reconnect reads on from `seq`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -816,7 +826,11 @@ pub struct SessionFollow {
     /// What the run read before its session was resumed, until a turn starts: a resume whose first prompt is dropped
     /// leaves it so again, not working with an idle agent.
     #[serde(default)]
-    pub before_resume: Option<RunState>,
+    pub before_resume: Option<BeforeResume>,
+    /// Its first prompt after a resume was dropped while Terminal held the session: a message may try again, though the
+    /// run reads stopped, until a turn starts or the session closes.
+    #[serde(default)]
+    pub waits_for_terminal: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

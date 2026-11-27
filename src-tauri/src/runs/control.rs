@@ -157,11 +157,39 @@ pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path
     write_attach_guarded(dir, login, program, worktree, words, None)
 }
 
-/// Where a Terminal's script moves its run's marker when it claims the session, just before it starts `claude`.
-pub fn claimed_of(marker: &Path) -> PathBuf {
-    let mut name = marker.file_name().unwrap_or_default().to_owned();
-    name.push(".claimed");
-    marker.with_file_name(name)
+/// One Open in Terminal's files for a run: `<run>.<attempt>.open` while its script has not claimed it, then
+/// `<run>.<attempt>.open.claimed.<pid>`, named by the process that `exec`s into `claude`, so a claim says who holds it.
+#[derive(Debug, Default)]
+pub struct Attempts {
+    pub open: Vec<PathBuf>,
+    pub claimed: Vec<(PathBuf, u32)>,
+}
+
+const CLAIMED: &str = ".claimed.";
+
+/// What attempts to open run `id`'s session in Terminal left in `dir`.
+pub fn attempts(dir: &Path, id: &str) -> Attempts {
+    let prefix = format!("{id}.");
+    let mut found = Attempts::default();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned).filter(|name| name.starts_with(&prefix)) else { continue };
+        match name.split_once(CLAIMED) {
+            Some((_, pid)) => {
+                if let Ok(pid) = pid.parse() {
+                    found.claimed.push((entry.path(), pid));
+                }
+            }
+            None if name.ends_with(".open") => found.open.push(entry.path()),
+            None => {}
+        }
+    }
+    found
+}
+
+/// A marker for a new attempt to open run `id` in Terminal, unlike any earlier one, so an old script can't claim it.
+pub fn new_marker(dir: &Path, id: &str) -> PathBuf {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|since| since.as_nanos()).unwrap_or_default();
+    dir.join(format!("{id}.{at}.open"))
 }
 
 /// What a take back says in a Terminal that had not yet started the session's `claude`.
@@ -174,12 +202,12 @@ pub fn write_attach_guarded(dir: &Path, login: Option<&ProviderEnv>, program: &P
     let (program, worktree, words_text) = (quotable(program)?, quotable(worktree)?, plain_words(words)?);
     let login = login_lines(login)?;
     let guard = match marker {
-        // Claimed by renaming it, which only one of this and a take back's removal can do: the one that loses knows.
+        // Claimed by renaming it to a name that holds this shell's pid, which `exec` keeps for `claude`: only one of this
+        // and a take back's removal can win, and the claim says who holds the session while it lives.
         // In double quotes: the words hold an apostrophe, and no `$`, backquote or backslash.
         Some(marker) => {
-            let claimed = claimed_of(marker);
-            let (marker, claimed) = (quotable(marker)?, quotable(&claimed)?);
-            format!("mv -f '{marker}' '{claimed}' 2>/dev/null || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}; touch '{claimed}'\n")
+            let marker = quotable(marker)?;
+            format!("mv -f '{marker}' '{marker}{CLAIMED}'\"$$\" 2>/dev/null || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}\n")
         }
         None => String::new(),
     };

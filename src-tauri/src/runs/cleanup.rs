@@ -138,9 +138,10 @@ impl RunService {
         if worktree_pending {
             run.worktree_removed_at = Some(Utc::now());
             // Nothing opens its session in Terminal any more.
-            let marker = self.terminal_marker(&run);
-            let _ = std::fs::remove_file(super::control::claimed_of(&marker));
-            let _ = std::fs::remove_file(marker);
+            let left = super::control::attempts(&self.terminal_dir(), &run.id);
+            for file in left.open.into_iter().chain(left.claimed.into_iter().map(|(claim, _)| claim)) {
+                let _ = std::fs::remove_file(file);
+            }
         }
         run.sessions_left |= left;
         for earlier in run.earlier_sessions.iter_mut().filter(|e| left || gone.contains(&e.short_id)) {

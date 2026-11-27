@@ -62,7 +62,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             (follow.taken_back, follow.resuming) = (false, false);
             run.handed_over = false;
             // Resume here starts it with no prompt: it waits at rest for a message, which starts its turn.
-            follow.before_resume = Some(run.state);
+            follow.before_resume = Some(crate::domain::BeforeResume { state: run.state, ended_at: run.ended_at, error: run.error.clone(), failure: run.failure.clone() });
             if taken_back && follow.answered.is_none() {
                 follow.resumed_here = true;
                 run.resumed_here = true;
@@ -103,6 +103,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::TurnStarted => {
             follow.in_turn = true;
             follow.before_resume = None;
+            follow.waits_for_terminal = false;
             follow.resumed_here = false;
             run.resumed_here = false;
             follow.cut = None;
@@ -282,9 +283,13 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Notice { text } if !text.starts_with(harness::session::NOT_SENT) && (text.contains(harness::session::STILL_IN_TERMINAL) || text.contains(harness::session::WORKS_IN_WORKTREE) || text.contains(harness::session::OPENS_SESSION) || text == harness::session::CANNOT_CHECK_TERMINAL) => {
             follow.held_in_terminal = true;
             follow.answered = None;
-            // No turn began, so it reads as it did before the resume.
-            if let Some(before) = follow.before_resume.filter(|_| !follow.in_turn) {
-                run.state = before;
+            // No turn began, so it reads as it did before the resume, and a message may try again.
+            if let Some(before) = follow.before_resume.clone().filter(|_| !follow.in_turn) {
+                run.state = before.state;
+                run.ended_at = before.ended_at;
+                run.error = before.error;
+                run.failure = before.failure;
+                follow.waits_for_terminal = true;
             }
             run.last_detail = Some(cut(&redact(&text), DETAIL_KEPT));
             rows.add("error", &text, None);
@@ -302,6 +307,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // can be resumed, and its question stays until a `question_closed`.
         Body::Closed { by } => {
             follow.resumed_here = false;
+            follow.waits_for_terminal = false;
             run.resumed_here = false;
             // A message can no longer reach it, so the way out its failure names is the one that still works.
             if run.failure == Some(RunFailure::SigningNeedsYou) {

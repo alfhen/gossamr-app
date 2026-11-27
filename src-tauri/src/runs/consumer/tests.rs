@@ -936,8 +936,10 @@ fn a_resume_whose_first_prompt_is_dropped_reads_as_it_did_before_it() {
     let said = format!("A `claude` (pid 41) {}. Quit it, then message the agent.", harness::session::WORKS_IN_WORKTREE);
     let mut played = Played::new();
     played.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }, Body::Closed { by: ClosedBy::Stop }]);
-    let before = played.run.state;
+    let (before, ended) = (played.run.state, played.run.ended_at);
+    assert!(ended.is_some());
     played.play([Body::Started { provider_session: "p".into(), resumed: true }, Body::Notice { text: said.clone() }, Body::PromptsDropped]);
-    assert_eq!(played.run.state, before, "not working with an idle agent");
+    assert_eq!((played.run.state, played.run.ended_at), (before, ended), "not working with an idle agent, and ended when it did");
     assert_eq!(played.run.last_detail.as_deref(), Some(said.as_str()));
+    assert!(played.follow.waits_for_terminal, "a message may try again");
 }

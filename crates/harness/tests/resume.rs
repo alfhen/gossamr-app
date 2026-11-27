@@ -462,7 +462,8 @@ struct Held(std::process::Child);
 
 impl Held {
     fn start(command: &mut std::process::Command) -> Held {
-        Held(command.stdin(std::process::Stdio::null()).spawn().unwrap())
+        // A pipe kept open for as long as it is held, so a shell can wait on it in a builtin.
+        Held(command.stdin(std::process::Stdio::piped()).spawn().unwrap())
     }
     fn pid(&self) -> u32 {
         self.0.id()
@@ -476,10 +477,11 @@ impl Drop for Held {
     }
 }
 
-/// A shell that runs on after `sleep`, so it keeps its own arguments, with `args` after its name.
+/// A shell with `args` after its name that waits in `read`, a builtin: it keeps its own arguments, and starts no child
+/// that shows them for a moment after its fork, which a check could name in its place.
 fn shell_with(args: &[&str]) -> std::process::Command {
     let mut command = std::process::Command::new("/bin/sh");
-    command.args(["-c", "sleep 30; true", "sh"]).args(args);
+    command.args(["-c", "read _", "sh"]).args(args);
     command
 }
 

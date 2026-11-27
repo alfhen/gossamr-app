@@ -1158,6 +1158,7 @@ export class MockRuns {
       const problem = answerProblem(text);
       if (problem) throw new Error(problem);
       const next = this.update(id, { state: "working", resumedHere: false, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: null });
+      this.markStale(id);
       this.changed();
       return next;
     }

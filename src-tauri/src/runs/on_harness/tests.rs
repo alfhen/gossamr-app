@@ -540,7 +540,7 @@ async fn on_harness_sharing(fx: crate::inbox::testing::Fixture, served: &Served,
     let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
     let env: Vec<(&str, String)> = git.env.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
     let home = git.home.clone();
-    crate::runs::rig::ready_in(fx, &env, move |svc| svc.with_harness(OnHarness { link, provider: "claude".into() }).with_cap(6).with_home(home)).await
+    crate::runs::rig::ready_in(fx, &env, move |svc| svc.with_harness(OnHarness { link, provider: "claude".into() }).with_cap(6).with_home(home).with_terminal_grace(std::time::Duration::ZERO)).await
 }
 
 impl Git {
@@ -2606,7 +2606,7 @@ async fn hand_over_resume_here_waits_while_terminal_is_still_opening_the_run() {
     until_state(&rig, &run, RunState::Done).await;
     rig.svc.attach(&run.id).await.unwrap();
     assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), TERMINAL_OPENING, "its claude may not have started yet");
-    assert!(rig.svc.terminal_marker(&run).exists(), "a take back refused for it leaves Terminal free to open the session");
+    assert!(rig.svc.terminal_marker(&run).is_some(), "a take back refused for it leaves Terminal free to open the session");
     assert_eq!(rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap_err().to_string(), TERMINAL_OPENING);
     tokio::time::sleep(grace).await;
     assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "once Terminal had time to start it");
@@ -2633,8 +2633,7 @@ async fn hand_over_resume_command_waits_until_the_harnesss_agent_has_gone() {
 async fn hand_over_terminal_script_runs_claude_only_while_its_marker_is_there_and_a_take_back_removes_it() {
     let served = Served::new(TWO_TURNS, 4);
     let (rig, run, _session, _) = handed_over_done(&served).await;
-    let marker = rig.svc.terminal_marker(&run);
-    assert!(marker.exists(), "Open in Terminal made it");
+    let marker = rig.svc.terminal_marker(&run).expect("Open in Terminal made it");
     let script = rig.opened.0.lock().unwrap()[0].clone();
     let body = std::fs::read_to_string(&script).unwrap();
     let guard = format!("mv -f '{}' ", marker.display());
@@ -2710,7 +2709,7 @@ async fn hand_over_and_resume_here_of_one_run_wait_for_each_other() {
     drop(held);
     let (taken, opened) = (taking.await.unwrap(), opening.await.unwrap());
     let now = rig.get(&run).await;
-    assert_eq!(now.handed_over, rig.svc.terminal_marker(&run).exists(), "Terminal may open it only while it is handed over: {taken:?} {:?}", opened.err());
+    assert_eq!(now.handed_over, rig.svc.terminal_marker(&run).is_some(), "Terminal may open it only while it is handed over: {taken:?} {:?}", opened.err());
 }
 
 #[tokio::test]
@@ -2721,7 +2720,7 @@ async fn hand_over_a_take_back_the_harness_refuses_for_its_own_agent_leaves_term
     raw.execute("UPDATE sessions SET given_up = 1, given_up_why = 'its agent would not stop' WHERE id = ?1", [&session]).unwrap();
     let refused = rig.svc.take_back(&run.id).await.unwrap_err().to_string();
     assert!(refused.starts_with("The harness didn't take the session back"), "{refused}");
-    assert!(rig.svc.terminal_marker(&run).exists(), "nothing resumed, so Terminal may still open it");
+    assert!(rig.svc.terminal_marker(&run).is_some(), "nothing resumed, so Terminal may still open it");
 }
 
 #[tokio::test]
@@ -2753,17 +2752,43 @@ async fn hand_over_a_second_open_in_terminal_waits_while_the_first_terminal_stil
 }
 
 #[tokio::test]
-async fn hand_over_resume_here_waits_while_terminals_script_has_just_claimed_the_session() {
+async fn hand_over_resume_here_waits_while_terminals_script_has_claimed_the_session_and_its_process_lives() {
     let served = Served::new(TWO_TURNS, 4);
     let (rig, run, _session, _) = handed_over_done(&served).await;
-    // As the script does just before `exec`, while its `claude` may not show its arguments yet.
-    let marker = rig.svc.terminal_marker(&run);
-    let claimed = crate::runs::control::claimed_of(&marker);
-    std::fs::rename(&marker, &claimed).unwrap();
-    assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), TERMINAL_STARTING);
-    // Long ago, the scans see what it started; here nothing runs, so it is taken back.
-    std::fs::File::options().write(true).open(&claimed).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
+    // As the script does just before `exec`, named by its pid, however long ago and whether a scan can read it or not.
+    let mut claiming = tokio::process::Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+    let pid = claiming.id().unwrap();
+    let marker = rig.svc.terminal_marker(&run).unwrap();
+    std::fs::rename(&marker, format!("{}.claimed.{pid}", marker.display())).unwrap();
+    assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), crate::runs::terminal_open::still_open(pid));
+    // Once that process has gone, its claim holds nothing.
+    claiming.kill().await.unwrap();
+    claiming.wait().await.unwrap();
     assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over);
+    assert!(crate::runs::control::attempts(&rig.svc.terminal_dir(), &run.id).claimed.is_empty(), "the dead claim is cleared");
+}
+
+#[tokio::test]
+async fn hand_over_a_second_open_in_terminal_retires_the_first_so_its_late_script_never_starts_claude() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, _) = handed_over_done(&served).await;
+    let first = rig.opened.0.lock().unwrap()[0].clone();
+    let first_marker = rig.svc.terminal_marker(&run).unwrap();
+    rig.svc.attach(&run.id).await.unwrap();
+    let second_marker = rig.svc.terminal_marker(&run).unwrap();
+    assert_ne!(first_marker, second_marker, "each Terminal has its own");
+    assert!(!first_marker.exists(), "the first one's is retired");
+    // The first Terminal starts its script only now.
+    let ran = std::process::Command::new("/bin/sh").arg(&first).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), crate::runs::control::TAKEN_BACK_HERE, "{}", String::from_utf8_lossy(&ran.stderr));
+    assert!(second_marker.exists(), "and can't claim the second one's");
+    // While a script that claimed it lives, there is no second Terminal.
+    let mut claiming = tokio::process::Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+    let pid = claiming.id().unwrap();
+    std::fs::rename(&second_marker, format!("{}.claimed.{pid}", second_marker.display())).unwrap();
+    let refused = rig.svc.attach(&run.id).await.unwrap_err().to_string();
+    assert_eq!(refused, format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first."));
+    claiming.kill().await.unwrap();
 }
 
 #[tokio::test]
@@ -2771,17 +2796,104 @@ async fn hand_over_after_a_take_back_whose_answer_was_lost_opens_terminal_only_o
     // An agent slow to go after a Stop, as one in the middle of writing is.
     let served = Served::new(&format!("{{\"stops_after_ms\": 800}}\n{TWO_TURNS}"), 4);
     let (rig, run, session, _) = handed_over_done(&served).await;
-    // The harness took it back and started its agent, and the app never heard: it still reads the session closed.
-    served.client().await.call(Op::TakeBack { session: session.clone(), permissions: None }).await.unwrap();
+    taken_back_unheard(&rig, &served, &session).await;
+    rig.svc.attach(&run.id).await.unwrap();
+    assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "Terminal opened only once its agent had gone");
+    assert_eq!(rig.opened.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn hand_over_aside_a_stopped_run_whose_first_prompt_was_dropped_for_terminal_takes_your_next_message() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    // As the fold leaves a stopped run resumed for a message that Terminal's holder had dropped, its session open.
+    rig.fx.core.apply_session(&session, |run, f| {
+        run.state = RunState::Stopped;
+        f.waits_for_terminal = true;
+        Vec::new()
+    }).await.unwrap();
+    rig.svc.message_agent(&run.id, "Try again.", crate::domain::Actor::Person).await.unwrap();
+    until_detail(&rig, &run, "Back again.").await;
+    assert!(prompted(&served, &session, "Try again.").await);
+}
+
+/// Takes `session` back over a connection of its own, as a take back whose answer the app lost: the harness runs its
+/// agent, and the app still reads the session handed over and closed.
+async fn taken_back_unheard(rig: &Rig, served: &Served, session: &str) {
+    served.client().await.call(Op::TakeBack { session: session.to_owned(), permissions: None }).await.unwrap();
     tokio::time::timeout(WAIT, async {
-        while !sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true) {
+        while !sessions(served).await.iter().any(|row| row["id"] == session && row["running"] == true) {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
     .unwrap();
-    assert!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "the app's follow is stale");
+    assert!(rig.fx.core.session_run(session).await.unwrap().unwrap().1.closed, "the app's follow is stale");
+}
+
+/// A process that names `provider` in its arguments, as the harness's real agent does, once the check sees it
+/// steadily. Its shell waits in a builtin, so it starts no child that could show its arguments for a moment.
+async fn naming(provider: &str) -> tokio::process::Child {
+    let held = tokio::process::Command::new("/bin/sh").args(["-c", "read _", "sh", "--resume", provider]).stdin(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+    let pid = held.id().unwrap();
+    tokio::time::timeout(WAIT, async {
+        let mut since: Option<std::time::Instant> = None;
+        while since.is_none_or(|since| since.elapsed() < std::time::Duration::from_millis(150)) {
+            match harness::process::holding(provider, std::path::Path::new("/nowhere"), &[], &[], &[]) {
+                Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
+                _ => since = None,
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the check sees it steadily");
+    held
+}
+
+#[tokio::test]
+async fn hand_over_after_a_take_back_the_app_missed_opens_terminal_though_the_harnesss_own_agent_names_the_session() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, provider) = handed_over_done(&served).await;
+    taken_back_unheard(&rig, &served, &session).await;
+    // The mock's agent is no process; this one stands in for the real one, `claude ... --resume <id>`.
+    let mut agent = naming(&provider).await;
     rig.svc.attach(&run.id).await.unwrap();
-    assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "Terminal opened only once its agent had gone");
-    assert_eq!(rig.opened.0.lock().unwrap().len(), 2);
+    assert_eq!(rig.opened.0.lock().unwrap().len(), 2, "Terminal opened");
+    assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "once the harness's agent had gone");
+    assert!(rig.get(&run).await.handed_over);
+    agent.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn hand_over_resume_here_after_a_take_back_the_app_missed_takes_your_next_message() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, _) = handed_over_done(&served).await;
+    taken_back_unheard(&rig, &served, &session).await;
+    rig.svc.take_back(&run.id).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::RESUMED_HERE).await;
+    rig.svc.message_agent(&run.id, "Carry on.", crate::domain::Actor::Person).await.unwrap();
+    until_detail(&rig, &run, "Back again.").await;
+    assert!(prompted(&served, &session, "Carry on.").await);
+}
+
+#[tokio::test]
+async fn hand_over_resume_here_after_a_take_back_the_app_missed_follows_the_session_so_clean_up_works() {
+    let (_repo, served, _git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    rig.svc.attach(&run.id).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    taken_back_unheard(&rig, &served, &session).await;
+    assert_eq!(rig.svc.resume_command(&run.id).await.unwrap_err().to_string(), TAKEN_BACK_ALREADY, "no command beside the harness's agent");
+    assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "Resume here takes up what the harness took back");
+    let resting = until_detail(&rig, &run, crate::runs::consumer::RESUMED_HERE).await;
+    assert!(resting.resumed_here, "the start the app missed reads as Resume here");
+    // At rest for your message, as after any Resume here: Clean up stops its agent first.
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), crate::runs::cleanup::Cleanup::Removed);
+    assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "its agent stopped");
 }

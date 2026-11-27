@@ -179,6 +179,9 @@ pub struct Listed {
     /// Set by the harness: the session's agent runs.
     #[serde(default)]
     pub running: bool,
+    /// Its last stop was a hand over to Terminal, and nothing took it back since.
+    #[serde(default)]
+    pub handed_over: bool,
     #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]
@@ -550,7 +553,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
                 (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1), cwd,
-                given_up, given_up_why, permissions
+                given_up, given_up_why, permissions, handed_over
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -558,8 +561,8 @@ impl Store {
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
             let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
             let (cwd, given_up) = (PathBuf::from(OsString::from_vec(row.get(13)?)), given_up(row.get(14)?, row.get(15)?));
-            let permissions = Permissions::from_stored(row.get::<_, Option<String>>(16)?.as_deref());
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, permissions, open_question, held: None, given_up, cwd })
+            let (permissions, handed_over) = (Permissions::from_stored(row.get::<_, Option<String>>(16)?.as_deref()), row.get(17)?);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, handed_over, repo, branch, login, effort, permissions, open_question, held: None, given_up, cwd })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

@@ -377,11 +377,23 @@ impl Link {
             }).await;
             return Err(why);
         }
-        // Taken back: the harness's mark is gone and the session starts again, so the app reads it so before it
-        // follows, and a follow that fails leaves a session the next connect follows, not one handed over for good.
-        let taken = self.inner.core.apply_session(session, |run, follow| {
+        self.refollow(session, false).await
+    }
+
+    /// Follows again a session the harness took back while the app lost the answer: the start it missed reads as
+    /// Resume here.
+    pub async fn adopt(&self, session: &str) -> Result<(), String> {
+        self.refollow(session, true).await
+    }
+
+    /// The harness's mark is gone, so the app reads it so before it follows, and a follow that fails leaves a session
+    /// the next connect follows, not one handed over for good. Only a start the app has not read yet is marked a take
+    /// back: one that came before the call returned has cleared the mark already.
+    async fn refollow(&self, session: &str, missed: bool) -> Result<(), String> {
+        let taken = self.inner.core.apply_session(session, move |run, follow| {
             run.handed_over = false;
             follow.closed = false;
+            follow.taken_back |= missed;
             Vec::new()
         });
         let follow = taken.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();

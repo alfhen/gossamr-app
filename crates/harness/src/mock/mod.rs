@@ -298,6 +298,7 @@ impl Mock {
             prompts: VecDeque::new(),
             in_turn: false,
             end,
+            stopping_at: None,
         };
         tokio::spawn(player.play());
         Ok(Link { commands, output, process: None })
@@ -331,6 +332,9 @@ struct Player {
     prompts: VecDeque<String>,
     in_turn: bool,
     end: Option<EndReport>,
+    /// When a Stop the script makes slow takes the agent away: kept here, so a step's timeout that drops the wait
+    /// for it does not drop the Stop.
+    stopping_at: Option<tokio::time::Instant>,
 }
 
 impl Player {
@@ -514,6 +518,17 @@ impl Player {
     /// recording does not have here is a divergence.
     async fn wait(&mut self, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         loop {
+            if let Some(at) = self.stopping_at {
+                let slow = tokio::time::sleep_until(at);
+                tokio::pin!(slow);
+                // A Kill that comes meanwhile ends it at once.
+                loop {
+                    tokio::select! {
+                        _ = &mut slow => return Got::Stopped,
+                        next = self.commands.recv() => if matches!(next, None | Some(Command::Kill)) { return Got::Stopped },
+                    }
+                }
+            }
             let Some(command) = self.commands.recv().await else { return Got::Stopped };
             // A start that was resumed over is stopped: what it is sent is not its own any more.
             if self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone())).is_none() {
@@ -521,15 +536,7 @@ impl Player {
             }
             match command {
                 Command::Stop if self.mock.inner.script.stops_after_ms > 0 => {
-                    let slow = tokio::time::sleep(std::time::Duration::from_millis(self.mock.inner.script.stops_after_ms));
-                    tokio::pin!(slow);
-                    // A Kill that comes meanwhile ends it at once.
-                    loop {
-                        tokio::select! {
-                            _ = &mut slow => return Got::Stopped,
-                            next = self.commands.recv() => if matches!(next, None | Some(Command::Kill)) { return Got::Stopped },
-                        }
-                    }
+                    self.stopping_at = Some(tokio::time::Instant::now() + std::time::Duration::from_millis(self.mock.inner.script.stops_after_ms));
                 }
                 Command::Stop | Command::Kill => return Got::Stopped,
                 command if accept(&command) => return Got::Matched(command),
