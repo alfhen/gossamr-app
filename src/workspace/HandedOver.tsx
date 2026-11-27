@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Run } from "../types";
+import { AGENT_STOPPING, type Run } from "../types";
 import { Box, BoxTitle, Btn, CodeBox } from "./AgentSheet";
 import { useRuns } from "./runsStore";
 
@@ -14,16 +14,29 @@ export const RESUME_ASK = "Did you quit it in Terminal? Gossamr starts it again 
 export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void }) {
   const backend = useRuns((s) => s.backend);
   const [command, setCommand] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
+    let again: ReturnType<typeof setTimeout> | undefined;
     setCommand(null);
-    backend?.runsResumeCommand(run.id).then(
-      (line) => live && setCommand(line),
-      () => live && setCommand(null),
-    );
-    return () => void (live = false);
+    // Asked again while the harness's own agent goes: the command is shown only once nothing else runs the session.
+    const ask = () =>
+      backend?.runsResumeCommand(run.id).then(
+        (line) => live && (setCommand(line), setStopping(false)),
+        (e: unknown) => {
+          if (!live) return;
+          const waits = String(e instanceof Error ? e.message : e).includes(AGENT_STOPPING);
+          setStopping(waits);
+          if (waits) again = setTimeout(ask, 1000);
+        },
+      );
+    void ask();
+    return () => {
+      live = false;
+      clearTimeout(again);
+    };
   }, [backend, run.id]);
   const resume = async () => {
     setBusy(true);
@@ -38,6 +51,7 @@ export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void })
       </BoxTitle>
       <p className="m-0 text-sm text-ws-ink2">{HANDED_OVER_TEXT}</p>
       {command && <CodeBox text={command} what="the command" wrap />}
+      {stopping && !command && <p className="m-0 text-sm text-ws-ink2">Stopping its agent…</p>}
       {asking ? (
         <div role="group" aria-label="Resume here" className="grid gap-2">
           <p className="m-0 text-sm text-ws-ink">{RESUME_ASK}</p>

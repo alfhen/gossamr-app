@@ -144,20 +144,24 @@ fn cwd_of(pid: u32) -> Option<std::path::PathBuf> {
 }
 
 /// A process other than `ours` that still holds a session: one whose arguments hold its provider id `id`, as
-/// `claude --resume <id>` in Terminal does, or one of `programs` working inside its `folder`. A shell left in the
-/// folder is no holder. Only this user's processes are read.
-pub fn holding(id: &str, folder: &std::path::Path, programs: &[&str], ours: &std::collections::HashSet<u32>) -> Option<u32> {
-    let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_owned());
+/// `claude --resume <id>` in Terminal does, or one of `programs` working inside its `folder` but not inside `skip`, the
+/// folders of other sessions there. A shell left in the folder is no holder. Only this user's processes are read; one
+/// of `ours` counts as ours only while it is the same process, so a reused pid is a stranger.
+pub fn holding(id: &str, folder: &std::path::Path, programs: &[&str], ours: &[Process], skip: &[std::path::PathBuf]) -> Option<u32> {
+    let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let folder = real(folder);
+    let skip: Vec<std::path::PathBuf> = skip.iter().map(|path| real(path)).collect();
     let joined = format!("={id}");
     let me = std::process::id();
     let named = |path: &std::path::Path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| programs.contains(&name));
-    all_pids().into_iter().filter(|pid| *pid != me && !ours.contains(pid)).find(|pid| {
+    let is_ours = |pid: u32| ours.iter().any(|agent| agent.pid == pid && started_of(pid) == Some(agent.started));
+    all_pids().into_iter().filter(|pid| *pid != me && !is_ours(*pid)).find(|pid| {
         let args = args_of(*pid).unwrap_or_default();
         let by_id = args.iter().skip(1).any(|arg| arg == id || arg.ends_with(&joined));
         // By the name it was started as too: an installed `claude` is a link to a file named by its version, and npm's
         // is a script `node` runs.
         let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path)) || interpreted(&args).is_some_and(|script| named(std::path::Path::new(script)));
-        by_id || provider && cwd_of(*pid).is_some_and(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd).starts_with(&folder))
+        by_id || provider && cwd_of(*pid).map(|cwd| real(&cwd)).is_some_and(|cwd| cwd.starts_with(&folder) && !skip.iter().any(|other| cwd.starts_with(other)))
     })
 }
 

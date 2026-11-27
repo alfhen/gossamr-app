@@ -416,6 +416,15 @@ impl Store {
         Ok(())
     }
 
+    /// Every session's folder, by its id.
+    pub fn session_folders(&self) -> Result<Vec<(String, PathBuf)>> {
+        use std::os::unix::ffi::OsStringExt;
+        let mut statement = self.conn.prepare("SELECT id, cwd FROM sessions")?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|(id, cwd)| (id, std::ffi::OsString::from_vec(cwd).into())).collect())
+    }
+
     /// Each session with an agent on record, which a harness before this one started and did not see go.
     pub fn agents(&self) -> Result<Vec<(String, Process)>> {
         let mut statement = self.conn.prepare("SELECT id, agent_pid, agent_started FROM sessions WHERE agent_pid IS NOT NULL AND agent_started IS NOT NULL")?;

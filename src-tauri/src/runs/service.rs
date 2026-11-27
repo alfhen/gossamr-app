@@ -104,6 +104,10 @@ pub struct RunService {
     pub(super) harness: Option<super::on_harness::OnHarness>,
     /// How long the carry on after a harness start waits for the app to catch up, once the harness answers.
     pub(super) catch_up: Duration,
+    /// When this app last opened Terminal on each run's session, and how long a take back waits after that: Terminal
+    /// may take seconds to start its `claude`, which no check sees before it has.
+    pub(super) opened_terminal: Mutex<HashMap<String, Instant>>,
+    pub(super) terminal_grace: Duration,
 }
 
 pub(super) use super::fresh::real;
@@ -164,6 +168,8 @@ impl RunService {
             started_at: Utc::now(),
             harness: None,
             catch_up: super::on_harness::CATCH_UP_TAKES_UP_TO,
+            opened_terminal: Mutex::new(HashMap::new()),
+            terminal_grace: super::on_harness::TERMINAL_STARTS_WITHIN,
         }
     }
 
@@ -211,6 +217,12 @@ impl RunService {
     #[cfg(test)]
     pub fn with_catch_up(mut self, catch_up: Duration) -> Self {
         self.catch_up = catch_up;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_terminal_grace(mut self, grace: Duration) -> Self {
+        self.terminal_grace = grace;
         self
     }
 

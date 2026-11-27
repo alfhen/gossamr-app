@@ -644,6 +644,9 @@ export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you 
 /** A run Resume here took back from Terminal, as `RESUMED_HERE` in `runs/consumer.rs`. */
 export const RESUMED_HERE = "Resumed here. Message the agent to go on.";
 
+/** Why the resume command waits while the harness's agent goes, as `AGENT_STOPPING` in `runs/on_harness.rs`. */
+export const AGENT_STOPPING = "Its agent is still stopping.";
+
 /** Why Resume here and the resume command refuse a run, as `NOT_HANDED_OVER` in `runs/on_harness.rs`. */
 export const NOT_HANDED_OVER = "It isn't handed over to Terminal.";
 

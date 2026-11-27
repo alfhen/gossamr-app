@@ -489,7 +489,7 @@ fn settled(pid: u32, id: &str, folder: &std::path::Path, programs: &[&str]) {
     let mut since = None;
     while since.is_none_or(|since: std::time::Instant| since.elapsed() < std::time::Duration::from_millis(150)) {
         assert!(std::time::Instant::now() < until, "the check never saw {pid} steadily");
-        match harness::process::holding(id, folder, programs, &Default::default()) {
+        match harness::process::holding(id, folder, programs, &[], &[]) {
             Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
             _ => since = None,
         }
@@ -545,9 +545,12 @@ fn the_check_for_terminal_counts_no_agent_of_the_harnesss_own() {
     let id = "1b2c3d4e-0000-4000-8000-00000000000f";
     let agent = Held::start(&mut shell_with(&["--resume", id]));
     settled(agent.pid(), id, std::path::Path::new("/nowhere"), &[]);
-    let ours = std::collections::HashSet::from([agent.pid()]);
-    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &ours), None, "the harness's own");
-    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &Default::default()), Some(agent.pid()), "anyone else's");
+    let started = harness::process::started_of(agent.pid()).unwrap();
+    let ours = [harness::process::Process { pid: agent.pid(), started }];
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &ours, &[]), None, "the harness's own");
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &[], &[]), Some(agent.pid()), "anyone else's");
+    let reused = [harness::process::Process { pid: agent.pid(), started: started + 1 }];
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &reused, &[]), Some(agent.pid()), "a pid the harness's agent had, now another process's");
 }
 
 #[tokio::test]
@@ -582,4 +585,54 @@ async fn take_back_waits_for_a_claude_an_interpreter_runs_in_the_sessions_folder
     let _other_node = node.spawn().ok().map(Held);
     std::thread::sleep(std::time::Duration::from_millis(300));
     harness.take_back(&id).await.expect("once the claude scripts ended, the other scripts hold nothing");
+}
+
+#[tokio::test]
+async fn a_holder_that_starts_after_the_take_back_has_the_first_prompt_refused_and_unsent_until_it_ends() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, ps) = handed_over_in(&harness, folder.path()).await;
+    let mut events = harness.take_back(&id).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // As Terminal's `claude --resume <id>`, which Open in Terminal had not started yet when the take back checked.
+    let late = Held::start(&mut shell_with(&["--resume", &ps]));
+    settled(late.pid(), &ps, std::path::Path::new("/nowhere"), &[]);
+    harness.send(&id, "first").unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::PromptsDropped)).await;
+    let said = format!("Its agent {} (pid {}). Quit it there, then Resume here.", harness::session::STILL_IN_TERMINAL, late.pid());
+    assert!(seen.iter().any(|event| event.body == Body::Notice { text: said.clone() }), "{seen:?}");
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Prompted { .. })), "nothing was sent");
+    assert!(!mock.received(&ps).contains(&Command::Prompt("first".into())));
+    drop(late);
+    harness.send(&id, "second").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+    assert!(mock.received(&ps).contains(&Command::Prompt("second".into())), "once it ended, the next prompt goes");
+}
+
+#[tokio::test]
+async fn take_back_waits_for_no_claude_in_another_sessions_folder_inside_its_own_nor_in_a_clones_old_worktrees() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let nested = folder.path().join("nested");
+    let worktrees = folder.path().join(".claude").join("worktrees").join("old");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&worktrees).unwrap();
+    let (id, _) = handed_over_in(&harness, folder.path()).await;
+    // Another session works in the nested folder, as a worktree of a clone run does.
+    let (other, _) = handed_over_in(&harness, &nested).await;
+    let started_as_claude = |cwd: &std::path::Path| {
+        let mut claude = std::process::Command::new("/bin/sleep");
+        std::os::unix::process::CommandExt::arg0(&mut claude, "claude").arg("30").current_dir(cwd);
+        Held::start(&mut claude)
+    };
+    let in_other = started_as_claude(&nested);
+    let in_old = started_as_claude(&worktrees);
+    settled(in_other.pid(), "no-such-id", &nested, &["claude"]);
+    settled(in_old.pid(), "no-such-id", &worktrees, &["claude"]);
+    harness.take_back(&id).await.expect("neither works in this session's own folder");
+    waits_for(harness.take_back(&other).await, in_other.pid());
 }

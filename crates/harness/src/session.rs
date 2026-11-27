@@ -167,6 +167,22 @@ struct OpenRequest {
 /// Why a take back waits: a process still holds the session, as Terminal's `claude --resume` does.
 pub const STILL_IN_TERMINAL: &str = "still runs this session in Terminal";
 
+/// What still holds session `id` other than the harness's own agents (and `also`, this start's), in the words a take
+/// back and its first prompt refuse with: its provider id in a process's arguments, or a provider's program in its
+/// folder but in no other session's folder inside it, nor in the old `.claude/worktrees` of a clone.
+fn held_in_terminal(store: &Store, id: &str, row: &crate::store::SessionRow, also: Option<&crate::process::Process>) -> Result<Option<String>> {
+    let Some(provider_session) = row.provider_session.as_deref() else { return Ok(None) };
+    let mut ours: Vec<crate::process::Process> = store.agents()?.into_iter().map(|(_, agent)| agent).collect();
+    ours.extend(also.cloned());
+    let mut skip: Vec<std::path::PathBuf> = store.session_folders()?.into_iter().filter(|(other, folder)| other != id && folder != &row.cwd && folder.starts_with(&row.cwd)).map(|(_, folder)| folder).collect();
+    skip.push(row.cwd.join(".claude").join("worktrees"));
+    let programs = crate::provider::Provider::ALL.map(crate::provider::Provider::binary);
+    Ok(crate::process::holding(provider_session, &row.cwd, &programs, &ours, &skip).map(|pid| {
+        let label = crate::provider::Provider::named(&row.provider).map_or("Its agent", crate::provider::Provider::label);
+        format!("{label} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.")
+    }))
+}
+
 enum Request {
     Prompt(String),
     /// An answer to an open question: to its held `ask` call, or else as the next prompt, before those already queued.
@@ -378,13 +394,8 @@ impl Harness {
             }
             let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
             // Handed over, it may still run in Terminal: two agents on one session would write one transcript.
-            if taken_back {
-                let ours: std::collections::HashSet<u32> = store.agents()?.into_iter().map(|(_, agent)| agent.pid).collect();
-                let programs = crate::provider::Provider::ALL.map(crate::provider::Provider::binary);
-                if let Some(pid) = crate::process::holding(&provider_session, &row.cwd, &programs, &ours) {
-                    let label = crate::provider::Provider::named(&row.provider).map_or("Its agent", crate::provider::Provider::label);
-                    return Err(Error::Refused(format!("{label} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.")));
-                }
+            if taken_back && let Some(words) = held_in_terminal(store, id, &row, None)? {
+                return Err(Error::Refused(words));
             }
             let driver = self.driver(&row.provider)?;
             let endpoint = match row.endpoint {
@@ -947,6 +958,7 @@ impl Harness {
             result_schema: schema,
             broken: AtomicBool::new(false),
             ended,
+            taken_back: AtomicBool::new(taken_back),
         };
         for text in notices {
             task.emit(Body::Notice { text });
@@ -1387,6 +1399,8 @@ struct Task {
     broken: AtomicBool,
     /// How the agent's process ended, if its driver says.
     ended: oneshot::Receiver<AgentEnd>,
+    /// Taken back from Terminal, and no prompt sent yet: the first one checks again that nothing else holds it.
+    taken_back: AtomicBool,
 }
 
 /// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
@@ -1483,6 +1497,10 @@ impl Task {
                         match self.prompt(&link, &mut queued) {
                             Some(next) => turn = next,
                             None => break true,
+                        }
+                        // No prompt went out, so no turn holds the slot.
+                        if turn == Turn::Idle {
+                            slot = None;
                         }
                     }
                     Some(granted) => {
@@ -1622,6 +1640,9 @@ impl Task {
                             match self.prompt(&link, &mut queued) {
                                 Some(next) => turn = next,
                                 None => break 'run true,
+                            }
+                            if turn == Turn::Idle {
+                                slot = None;
                             }
                         }
                     }
@@ -2071,6 +2092,18 @@ impl Task {
     /// the store would not take is not sent, and the session stops on its broken store. None when the driver no longer
     /// takes commands: the session says so and stops.
     fn prompt(&self, link: &Link, queued: &mut VecDeque<(String, Option<String>)>) -> Option<Turn> {
+        // A `claude` that Terminal started after the take back's own check would write beside this one: what waits is
+        // dropped, unsent, and the client hears why.
+        if self.taken_back.load(Ordering::Relaxed) {
+            let held = self.inner.with_store(|store| held_in_terminal(store, &self.id, &store.session(&self.id)?, link.process.as_ref()));
+            if let Ok(Some(words)) = held {
+                self.emit(Body::Notice { text: words });
+                self.drop_queued(queued);
+                self.emit(Body::PromptsDropped);
+                return Some(Turn::Idle);
+            }
+            self.taken_back.store(false, Ordering::Relaxed);
+        }
         let (text, answers) = queued.pop_front().expect("a prompt is queued");
         if !self.emit(Body::Prompted { text: text.clone() }) {
             return Some(Turn::Idle);

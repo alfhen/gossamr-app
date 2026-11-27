@@ -25,6 +25,11 @@ async fn on_harness_as(served: &Served, provider: &str, cap: usize) -> Rig {
 
 /// `on_harness_as`, whose carry on after a harness start waits `catch_up` for the app to catch up.
 async fn on_harness_with(served: &Served, provider: &str, cap: usize, catch_up: std::time::Duration) -> Rig {
+    on_harness_graced(served, provider, cap, catch_up, std::time::Duration::ZERO).await
+}
+
+/// `on_harness_with`, where a take back waits `grace` after the app opened Terminal on the run.
+async fn on_harness_graced(served: &Served, provider: &str, cap: usize, catch_up: std::time::Duration, grace: std::time::Duration) -> Rig {
     let fx = fixture_watching(&["acme/webshop"]).await;
     let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
@@ -33,7 +38,7 @@ async fn on_harness_with(served: &Served, provider: &str, cap: usize, catch_up: 
     let notices = Arc::new(Notices::default());
     let link = Arc::new(Link::start(fx.core.clone(), direct, reads, notices.clone(), changed));
     let told = notices.clone();
-    let mut rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap).with_notifier(told).with_catch_up(catch_up)).await;
+    let mut rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap).with_notifier(told).with_catch_up(catch_up).with_terminal_grace(grace)).await;
     rig.notices = notices;
     rig
 }
@@ -2397,7 +2402,7 @@ async fn hand_over_resume_here_waits_while_the_harness_finds_a_process_resuming_
     tokio::time::timeout(WAIT, async {
         let mut since: Option<std::time::Instant> = None;
         while since.is_none_or(|since| since.elapsed() < std::time::Duration::from_millis(150)) {
-            match harness::process::holding(&provider, std::path::Path::new("/nowhere"), &[], &Default::default()) {
+            match harness::process::holding(&provider, std::path::Path::new("/nowhere"), &[], &[], &[]) {
                 Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
                 _ => since = None,
             }
@@ -2439,4 +2444,35 @@ async fn hand_over_aside_a_stopped_run_whose_session_waits_open_takes_no_message
     rig.set(&run, |r| r.state = RunState::Stopped).await;
     let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
     assert_eq!(refused, "This run is stopped, so it takes no message.");
+}
+
+#[tokio::test]
+async fn hand_over_resume_here_waits_while_terminal_is_still_opening_the_run() {
+    let served = Served::new(TWO_TURNS, 4);
+    let grace = std::time::Duration::from_millis(600);
+    let rig = on_harness_graced(&served, "mock", 6, CATCH_UP_TAKES_UP_TO, grace).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    rig.svc.attach(&run.id).await.unwrap();
+    assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), TERMINAL_OPENING, "its claude may not have started yet");
+    assert_eq!(rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap_err().to_string(), TERMINAL_OPENING);
+    tokio::time::sleep(grace).await;
+    assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "once Terminal had time to start it");
+}
+
+#[tokio::test]
+async fn hand_over_resume_command_waits_until_the_harnesss_agent_has_gone() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, _) = handed_over_done(&served).await;
+    // As the app reads it between the harness taking the hand-over and its agent going.
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.closed = false;
+        Vec::new()
+    }).await.unwrap();
+    assert_eq!(rig.svc.resume_command(&run.id).await.unwrap_err().to_string(), AGENT_STOPPING);
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.closed = true;
+        Vec::new()
+    }).await.unwrap();
+    assert!(rig.svc.resume_command(&run.id).await.unwrap().contains("--resume"));
 }

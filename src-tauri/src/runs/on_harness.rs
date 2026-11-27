@@ -70,6 +70,15 @@ pub const TAKE_OVER_ONLY_DENY: &str = "Take over is for a request Gossamr can on
 pub const HANDED_OVER_NOT_GONE: &str = "It is handed over, but its agent hasn't stopped yet, so Terminal didn't open. Open in Terminal again once it has.";
 pub const HANDED_OVER_MAY_RUN: &str = "It is handed over, but its agent may still run, so Terminal didn't open:";
 
+/// How long Terminal may take to start the `claude` the app opened it on.
+pub(super) const TERMINAL_STARTS_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Why Resume here waits just after the app opened Terminal on the run.
+pub const TERMINAL_OPENING: &str = "Terminal is still opening it. Quit it there once it opens, then Resume here.";
+
+/// Why the resume command waits: the harness's agent has not gone yet, or may still run.
+pub const AGENT_STOPPING: &str = "Its agent is still stopping.";
+
 /// Why Resume here and the resume command refuse a run.
 pub const NOT_HANDED_OVER: &str = "It isn't handed over to Terminal.";
 
@@ -588,6 +597,10 @@ impl RunService {
     /// harness.
     pub(super) async fn take_back_on_harness(&self, run: &Run) -> Option<Result<Run>> {
         let (link, session) = self.on_harness_of(run)?;
+        let opened = self.opened_terminal.lock().unwrap_or_else(|e| e.into_inner()).get(&run.id).copied();
+        if opened.is_some_and(|at| at.elapsed() < self.terminal_grace) {
+            return Some(Err(Error::Proposal(TERMINAL_OPENING.into())));
+        }
         if let Err(why) = self.left_terminal(run, session).await {
             return Some(Err(why));
         }
@@ -667,12 +680,14 @@ impl RunService {
                 // run on the session at once.
                 let gone = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
                     while !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.closed) {
+                        // A link going away has not seen it close.
                         if applied.changed().await.is_err() {
-                            return;
+                            return false;
                         }
                     }
+                    true
                 });
-                if gone.await.is_err() {
+                if !matches!(gone.await, Ok(true)) {
                     return Err(Error::Proposal(HANDED_OVER_NOT_GONE.into()));
                 }
                 if let Some(why) = link.kept(session).await {
@@ -684,7 +699,9 @@ impl RunService {
             let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
             let words = vec!["--resume".to_owned(), resumed_by];
             let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run), &words)?;
-            self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+            self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))?;
+            self.opened_terminal.lock().unwrap_or_else(|e| e.into_inner()).insert(run.id.clone(), std::time::Instant::now());
+            Ok(())
         }.await)
     }
 
@@ -694,7 +711,12 @@ impl RunService {
         let run = self.load(run_id).await?;
         let (_, session) = self.on_harness_of(&run).filter(|_| run.handed_over).ok_or_else(|| Error::Proposal(NOT_HANDED_OVER.into()))?;
         let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
-        let resumed_by = follow.provider_session.ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to resume.".into()))?;
+        let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to resume.".into()))?;
+        // Not while the harness's own agent may still run: two would write the session.
+        let (link, _) = self.on_harness_of(&run).expect("checked above");
+        if !follow.closed || link.kept(session).await.is_some() {
+            return Err(Error::Proposal(AGENT_STOPPING.into()));
+        }
         let tc = self.observing_toolchain(&run).await?;
         let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
         super::control::resume_line(tc.login.as_ref(), &program, &session_folder(&run), &["--resume".to_owned(), resumed_by])
