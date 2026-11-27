@@ -17,7 +17,9 @@
 //! instead, as an agent that will not stop does; with `FAKE_APP_SERVER_EXIT_ON_INTERRUPT` set, `turn/interrupt` makes it
 //! exit at once, as an app-server that crashed, leaving its sleep. `background` starts, in a group of its own, a shell
 //! that starts `sleep 60` a moment later, writes its pid to `inner.pid` and exits, as `npm run dev &` does: the sleep is
-//! then no child of app-server's, only a member of the shell's group. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
+//! then no child of app-server's, only a member of the shell's group. `escape` starts a shell that sends `sleep 60` to the
+//! background in a session of its own, writes its pid to `escaped.pid` and exits at once, before `item/started`: the sleep
+//! is then in no tree or group app-server leads to. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
 //! 900, and completes the turn once it is answered.
 
 use std::io::{BufRead, Write};
@@ -194,6 +196,15 @@ impl Fake {
             let (shell, inner) = (self.out.join("shell.pid"), self.out.join("inner.pid"));
             let script = format!("echo $$ > '{}'; sleep 0.3; /bin/sleep 60 & echo $! > '{}'", shell.display(), inner.display());
             let _ = std::process::Command::new("/bin/sh").args(["-c", &script]).process_group(0).spawn();
+            self.notify("item/started", json!({"threadId": thread, "turnId": turn, "item": {"type": "commandExecution", "id": format!("cmd-{n}"), "command": "sleep 60 &"}}));
+            return;
+        }
+        if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("escape") {
+            let escaped = self.out.join("escaped.pid");
+            let script = format!("/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec \"/bin/sleep\", \"60\"' & echo $! > '{}'", escaped.display());
+            if let Ok(mut shell) = std::process::Command::new("/bin/sh").args(["-c", &script]).process_group(0).spawn() {
+                let _ = shell.wait();
+            }
             self.notify("item/started", json!({"threadId": thread, "turnId": turn, "item": {"type": "commandExecution", "id": format!("cmd-{n}"), "command": "sleep 60 &"}}));
             return;
         }

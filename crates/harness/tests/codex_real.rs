@@ -68,3 +68,76 @@ async fn codex_real_the_drivers_thread_start_in_an_empty_signed_out_codex_home_l
     assert!(!login.join("config.toml").exists(), "the driver's thread/start wrote no config.toml");
     assert_eq!(login_snapshot(&home, &shell), before, "and no login's config changed");
 }
+
+/// The `sleep 300` processes working in `folder`, by pid.
+fn sleeps_in(folder: &std::path::Path) -> Vec<u32> {
+    working_in(folder)
+        .into_iter()
+        .filter_map(|pid| pid.parse::<u32>().ok())
+        .filter(|pid| {
+            let out = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim() == "sleep 300"
+        })
+        .collect()
+}
+
+/// A worktree of a scratch clone, as a session works in.
+fn scratch_worktree(tmp: &std::path::Path) -> std::path::PathBuf {
+    let clone = tmp.join("clone");
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).output().unwrap().status.success(), "git {}", args[0]);
+    git(&["init", "-q", clone.to_str().unwrap()]);
+    git(&["-C", clone.to_str().unwrap(), "-c", "user.name=Harness Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "start"]);
+    let work = tmp.join("clone+worktrees").join("h7a-2");
+    git(&["-C", clone.to_str().unwrap(), "worktree", "add", "-q", work.to_str().unwrap(), "-b", "h7a-2"]);
+    work.canonicalize().unwrap()
+}
+
+const BACKGROUND: &str = "Run exactly this one shell command, with no other command: `sleep 300 > /dev/null 2>&1 & echo $!`. Then reply with the word done.";
+
+/// A job a command sends to the background in its own group is gone by the turn's end: Codex ends the command's group
+/// when the command returns (0.171.0, in its default sandbox). Any `sleep` left is killed by its pid.
+#[tokio::test]
+#[ignore]
+async fn codex_real_a_job_a_command_sends_to_the_background_is_gone_by_the_turns_end() {
+    let home = dirs::home_dir().expect("a home folder");
+    let tmp = tempfile::tempdir().unwrap();
+    let work = scratch_worktree(tmp.path());
+    let setup = harness::work::Setup::of_this_machine(tmp.path().join("data"));
+    setup.capture().await.expect("the shell's environment is read");
+    let shell = setup.shell().expect("a capture");
+    let before = login_snapshot(&home, &shell);
+    let binary = setup.places().find(harness::provider::Provider::Codex, &shell).expect("codex is installed");
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = setup.agent_env("codex", None).expect("the agent's environment").into_pairs().collect();
+    let mut tools = harness::tools::ToolsEndpoint::unattached();
+    tools.allowed = vec![tools.name.clone()];
+    let launch = Launch { cwd: work.clone(), locked: false, model: None, login: None, effort: Some("low".into()), permissions: Default::default(), resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
+    let mut link = harness::codex::driver::CodexDriver::new(binary).open(launch).unwrap();
+    link.commands.send(Command::Prompt(BACKGROUND.into())).unwrap();
+    let mut said = vec![];
+    let ended = tokio::time::timeout(Duration::from_secs(180), async {
+        while let Some(body) = link.output.recv().await {
+            let done = matches!(body, Body::TurnEnded { .. } | Body::Failed { .. });
+            said.push(body);
+            if done {
+                return;
+            }
+        }
+    });
+    ended.await.expect("the turn ends within 180 s");
+    let during = sleeps_in(&work);
+    link.commands.send(Command::Stop).unwrap();
+    while tokio::time::timeout(Duration::from_secs(20), link.output.recv()).await.expect("app-server goes").is_some() {}
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after = sleeps_in(&work);
+    let calls: Vec<&Body> = said.iter().filter(|body| matches!(body, Body::ToolCall { .. } | Body::ToolResult { .. } | Body::Notice { .. })).collect();
+    eprintln!("calls: {calls:?}");
+    eprintln!("sleep 300 in the worktree: {} at the turn's end, {} after Stop", during.len(), after.len());
+    for pid in &after {
+        // SAFETY: a `sleep 300` this test's own agent started, working in this test's own scratch worktree.
+        unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+    }
+    assert_eq!(login_snapshot(&home, &shell), before, "no login's config changed");
+    let started = said.iter().any(|body| matches!(body, Body::ToolResult { output, .. } if output.as_str().is_some_and(|out| out.lines().any(|line| line.trim().parse::<u32>().is_ok()))));
+    assert!(started, "the command started its job and said its pid");
+    assert_eq!((during, after), (vec![], vec![]), "the job was gone by the turn's end");
+}

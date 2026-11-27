@@ -414,6 +414,102 @@ async fn codex_an_exited_app_servers_command_is_stopped_from_its_record_and_a_re
     drop(stdin);
 }
 
+/// A `sleep 60` that a shell in `folder` sent to the background before it exited, in the shell's group: the system's
+/// now, as the person's own job or an agent's command left it.
+fn left_by_a_shell(folder: &Path) -> (u32, Process) {
+    use std::io::BufRead;
+    let script = format!("cd '{}' && /bin/sleep 60 & echo $!", folder.display());
+    let mut shell = std::process::Command::new("/bin/sh").args(["-c", &script]).stdout(std::process::Stdio::piped()).process_group(0).spawn().unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    let group = shell.id();
+    shell.wait().unwrap();
+    let pid: u32 = line.trim().parse().unwrap();
+    (group, Process { pid, started: process::started_of(pid).expect("the sleep runs") })
+}
+
+/// A process that has exited, by the pid and start time it had.
+fn exited() -> Process {
+    let mut child = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+    let gone = Process { pid: child.id(), started: process::started_of(child.id()).unwrap() };
+    child.kill().unwrap();
+    child.wait().unwrap();
+    gone
+}
+
+fn end(left: &Process) {
+    let _ = process::signal(left, libc::SIGKILL);
+}
+
+#[tokio::test]
+async fn codex_a_stored_command_whose_pid_now_leads_an_older_group_gets_nothing_signalled() {
+    let (tmp, data) = data_dir();
+    // The person's own group whose leader exited, its member running on, as a pipeline whose first command exited.
+    let (group, member) = left_by_a_shell(tmp.path());
+    let store = Store::open(&data).unwrap();
+    store.create_session("s", "codex", false, tmp.path(), None).unwrap();
+    store.set_agent("s", Some(&exited())).unwrap();
+    // The record's command had that pid, and started an hour after the group's member did.
+    store.set_agent_tree("s", &[Process { pid: group, started: member.started + 3_600 }]).unwrap();
+    let harness = harness_on(&data, store, &[], &tmp.path().join("out"));
+    assert_eq!(process::seam::sent_to(group), Vec::<i32>::new(), "the group its pid leads now was never signalled");
+    assert!(process::alive(&member), "and its member runs on");
+    harness.shutdown().await;
+    assert!(reopen(&data).await.session("s").unwrap().given_up.is_some(), "and the session stays given up on");
+    end(&member);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn codex_at_a_restart_what_the_system_took_in_in_the_worktree_after_the_agent_started_is_stopped_and_nothing_else() {
+    let (tmp, data) = data_dir();
+    let (worktree, elsewhere) = (tmp.path().join("clone+worktrees").join("b"), tmp.path().join("elsewhere"));
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (_, before) = left_by_a_shell(&worktree);
+    // Start times are in seconds on macOS.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let agent = exited();
+    let ((_, ours), (_, outside)) = (left_by_a_shell(&worktree), left_by_a_shell(&elsewhere));
+    let store = Store::open(&data).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let new = harness::store::NewSession { provider: "codex", locked: false, cwd: &worktree, model: None, login: None, effort: None, permissions: Default::default(), work: Some(&work), endpoint: None, tools: &[], result_schema: None };
+    store.insert_session("s", &new).unwrap();
+    store.set_agent("s", Some(&agent)).unwrap();
+    let harness = harness_on(&data, store, &[], &tmp.path().join("out"));
+    gone(&ours, "the job left in the worktree").await;
+    for (left, what) in [(&before, "one that started before the agent"), (&outside, "one outside the worktree")] {
+        assert_eq!(process::seam::sent_to(left.pid), Vec::<i32>::new(), "{what} was never signalled");
+        assert!(process::alive(left), "and runs on");
+        end(left);
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_a_job_a_command_sent_to_the_background_in_a_session_of_its_own_goes_when_its_session_closes() {
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    let worktree = tmp.path().join("clone+worktrees").join("b");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[("FAKE_APP_SERVER_TURN", "escape")], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree, work: Some(work), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(out.join("escaped.pid")).map_or(true, |pid| pid.trim().is_empty()) {
+        assert!(tokio::time::Instant::now() < given, "the fake's shell left its job");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let escaped = process_in(&out, "escaped.pid");
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&escaped, "the job the command left").await;
+    harness.shutdown().await;
+}
+
 #[tokio::test]
 async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     // As `npm run dev &`: the command's shell exits, and the server it started lives on in the shell's group, no child of

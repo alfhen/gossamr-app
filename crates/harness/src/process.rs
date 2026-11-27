@@ -321,9 +321,24 @@ pub fn descendants(process: &Process) -> Vec<Process> {
     found
 }
 
+/// What the system took in that started at or after `since` and works in a folder inside `worktree`: a job a command
+/// sent to the background before it exited, which neither the agent's tree nor any group it noted leads to any more.
+/// Orphans go to pid 1, launchd or init; on Linux a subreaper above the harness would take them instead.
+pub fn adopted_in(worktree: &std::path::Path, since: u64) -> Vec<Process> {
+    let Ok(within) = std::fs::canonicalize(worktree) else { return vec![] };
+    children_of(1)
+        .into_iter()
+        .filter_map(|pid| {
+            let started = started_of(pid).filter(|started| *started >= since)?;
+            cwd_of(pid)?.starts_with(&within).then_some(Process { pid, started })
+        })
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 fn children_of(parent: u32) -> Vec<u32> {
-    const MAX: usize = 1024;
+    // launchd has hundreds of children.
+    const MAX: usize = 4096;
     let mut pids = [0 as libc::pid_t; MAX];
     let size = std::mem::size_of_val(&pids) as libc::c_int;
     // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
