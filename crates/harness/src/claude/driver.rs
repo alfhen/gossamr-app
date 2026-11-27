@@ -114,19 +114,19 @@ fn agent_process(pid: u32, started: Option<u64>) -> Result<Process, OpenError> {
 
 /// Lines from a reader, cut at `max` bytes, as UTF-8 with any invalid byte replaced. A partial line is kept between
 /// reads, so a read that `select!` drops loses nothing.
-struct Lines<R> {
+pub(crate) struct Lines<R> {
     reader: R,
     line: Vec<u8>,
     cut: bool,
 }
 
 impl<R: AsyncBufRead + Unpin> Lines<R> {
-    fn new(reader: R) -> Lines<R> {
+    pub(crate) fn new(reader: R) -> Lines<R> {
         Lines { reader, line: Vec::new(), cut: false }
     }
 
     /// The next line and whether it was cut; None at the end. A last line with no newline is still a line.
-    async fn next(&mut self, max: usize) -> std::io::Result<Option<(String, bool)>> {
+    pub(crate) async fn next(&mut self, max: usize) -> std::io::Result<Option<(String, bool)>> {
         let Lines { reader, line, cut } = self;
         loop {
             let chunk = reader.fill_buf().await?;
@@ -269,8 +269,8 @@ impl ClaudeDriver {
     }
 }
 
-/// Writes each line in order. Dropping the sender closes stdin, which is how Claude is told to go.
-async fn write(mut stdin: ChildStdin, mut lines: UnboundedReceiver<String>) {
+/// Writes each line in order. Dropping the sender closes stdin, which is how the agent is told to go.
+pub(crate) async fn write(mut stdin: ChildStdin, mut lines: UnboundedReceiver<String>) {
     while let Some(line) = lines.recv().await {
         if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() || stdin.flush().await.is_err() {
             return;

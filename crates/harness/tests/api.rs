@@ -1333,7 +1333,7 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_clau
         ("WIRE_REPLAY_OUT".to_owned(), out.display().to_string()),
     ];
     let setup = harness::work::Setup::new(None, dir.clone()).with_shell_env(harness::env::RunEnv::from_pairs(env));
-    let drivers = harness::serve_drivers(None, harness::claude::driver::ClaudeDriver::found(harness::binary::CliPlaces::none()));
+    let drivers = harness::serve_drivers(None, &harness::binary::CliPlaces::none());
     let token = Token::random();
     let first = token.clone();
     let server = Server::bind_with(&dir, move || Some(first), drivers, settings(4), setup).unwrap();
@@ -1341,7 +1341,7 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_clau
     let mut client = Client::connect(&dir, &token).await.unwrap();
     let providers = client.call(Op::Providers { logins: vec![] }).await.unwrap();
     let names: Vec<&str> = providers["drivers"].as_array().unwrap().iter().filter_map(|driver| driver["name"].as_str()).collect();
-    assert_eq!(names, ["claude"], "no mock with no script");
+    assert_eq!(names, ["claude", "codex"], "no mock with no script");
     // The login check ran the same `claude` the session will, which the replay reports as a short read; only the
     // session's own run is judged.
     let _ = std::fs::remove_file(out.join("report.txt"));

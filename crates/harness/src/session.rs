@@ -1013,10 +1013,19 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
                 true => Leftover::Gone(FOUND_GONE),
                 false => Leftover::Kept("it was recorded with no boot, and its pid or its group still answers"),
             },
-            _ if alive(&agent) => match kill_group(&agent) {
-                Ok(()) => Leftover::Sent(vec![agent.clone()]),
-                Err(_) => Leftover::Kept("the harness could not kill its group"),
-            },
+            // Its tree first, while the agent still leads it: a command it started in a group of its own, as Codex's
+            // are, is no member of its group. Each only while its pid still has its start time.
+            _ if alive(&agent) => {
+                let tree = crate::process::descendants(&agent);
+                for member in &tree {
+                    let _ = signal(member, libc::SIGKILL);
+                    crate::process::kill_led_group(member);
+                }
+                match kill_group(&agent) {
+                    Ok(()) => Leftover::Sent(std::iter::once(agent.clone()).chain(tree).collect()),
+                    Err(_) => Leftover::Kept("the harness could not kill its group"),
+                }
+            }
             // A group outlives its leader: what the agent started may still work in its worktree.
             _ => match left_of(&agent, worktree.as_deref()) {
                 Left::Nothing => Leftover::Gone(FOUND_GONE),
