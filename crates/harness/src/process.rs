@@ -154,10 +154,22 @@ pub fn holding(id: &str, folder: &std::path::Path, programs: &[&str], ours: &std
     all_pids().into_iter().filter(|pid| *pid != me && !ours.contains(pid)).find(|pid| {
         let args = args_of(*pid).unwrap_or_default();
         let by_id = args.iter().skip(1).any(|arg| arg == id || arg.ends_with(&joined));
-        // By the name it was started as too: an installed `claude` is a link to a file named by its version.
-        let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path));
+        // By the name it was started as too: an installed `claude` is a link to a file named by its version, and npm's
+        // is a script `node` runs.
+        let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path)) || interpreted(&args).is_some_and(|script| named(std::path::Path::new(script)));
         by_id || provider && cwd_of(*pid).is_some_and(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd).starts_with(&folder))
     })
+}
+
+/// The script an interpreter runs: the first of its arguments that is no option (nor, for `env`, a variable), when
+/// its first names an interpreter.
+fn interpreted(args: &[String]) -> Option<&str> {
+    let name = std::path::Path::new(args.first()?).file_name()?.to_str()?;
+    let interpreter = matches!(name, "node" | "bun" | "deno" | "sh" | "bash" | "zsh" | "env") || name.to_ascii_lowercase().starts_with("python");
+    if !interpreter {
+        return None;
+    }
+    args.iter().skip(1).map(String::as_str).find(|arg| !arg.starts_with('-') && !(name == "env" && arg.contains('=')))
 }
 
 /// Every pid this user may see.

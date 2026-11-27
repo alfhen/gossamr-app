@@ -549,3 +549,37 @@ fn the_check_for_terminal_counts_no_agent_of_the_harnesss_own() {
     assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &ours), None, "the harness's own");
     assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &Default::default()), Some(agent.pid()), "anyone else's");
 }
+
+#[tokio::test]
+async fn take_back_waits_for_a_claude_an_interpreter_runs_in_the_sessions_folder_but_not_for_its_other_scripts() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, _) = handed_over_in(&harness, folder.path()).await;
+    // As npm installs Claude: a script named `claude` its interpreter runs, here started with no id, as `--continue` is.
+    let scripts = tempfile::tempdir().unwrap();
+    let write = |dir: &str, name: &str, body: &str| {
+        let path = scripts.path().join(dir).join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        path
+    };
+    let by_sh = write("sh", "claude", "sleep 30; true\n");
+    let by_python = write("python", "claude", "import time\ntime.sleep(30)\n");
+    for (interpreter, script) in [("/bin/sh", &by_sh), ("python3", &by_python)] {
+        let mut command = std::process::Command::new(interpreter);
+        command.arg(script).arg("--continue").current_dir(folder.path());
+        let claude = Held::start(&mut command);
+        settled(claude.pid(), "no-such-id", folder.path(), &["claude"]);
+        waits_for(harness.take_back(&id).await, claude.pid());
+    }
+    // An interpreter in the folder on anything else is no holder.
+    let mut other = std::process::Command::new("/bin/sh");
+    let _other_sh = Held::start(other.arg(write("other", "other.sh", "sleep 30; true\n")).current_dir(folder.path()));
+    let mut node = std::process::Command::new("node");
+    node.arg(write("other", "other.js", "setTimeout(() => {}, 30000);\n")).current_dir(folder.path()).stdin(std::process::Stdio::null());
+    let _other_node = node.spawn().ok().map(Held);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    harness.take_back(&id).await.expect("once the claude scripts ended, the other scripts hold nothing");
+}

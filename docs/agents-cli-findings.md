@@ -280,7 +280,7 @@ Take over in Terminal shows `claude --resume <id>` in the run's worktree, and Re
 - It ignored EOF on its input and kept running; it ends on `/exit` or a signal.
 - For some milliseconds after any process starts, macOS reads neither its spawner's arguments nor its own (`KERN_PROCARGS2`), so a check in that window misses it.
 
-So a take back is refused while a process holds the session (`harness::process::holding`, in `resume_from`, under the start lock): one whose arguments hold the session's provider id, or one started as a provider's program (by its first argument or its path) whose working folder is inside the session's. A shell left in the folder is no holder, nor is an agent of the harness's own. The app also asks Claude's listing on the run's login for an interactive row with the session's id, which finds a `/resume` started from another folder when Claude lists it.
+So a take back is refused while a process holds the session (`harness::process::holding`, in `resume_from`, under the start lock): one whose arguments hold the session's provider id, or one started as a provider's program (by its first argument, its path, or the script an interpreter such as `node` runs, as an npm install of Claude Code is) whose working folder is inside the session's. `claude --continue` in the worktree carries no id, so only that second test finds it. A shell left in the folder is no holder, nor is an agent of the harness's own. The app also asks Claude's listing on the run's login for an interactive row with the session's id, which finds a `/resume` started from another folder when Claude lists it.
 
 ## Cleanup check (PR 12a)
 
