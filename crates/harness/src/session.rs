@@ -1035,24 +1035,27 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
                         found.push(left);
                     }
                 }
-                let noted = kill_noted(&found, &agent, worktree.as_deref());
+                let noted = kill_noted(&found, worktree.as_deref());
                 match (kill_group(&agent), noted) {
-                    (Ok(()), Ok(noted)) => Leftover::Sent(std::iter::once(agent.clone()).chain(noted).collect()),
+                    (Ok(()), Ok(noted)) => Leftover::Sent(std::iter::once(agent.clone()).chain(noted).chain(kill_adopted(&agent, worktree.as_deref())).collect()),
                     (Err(_), _) => Leftover::Kept("the harness could not kill its group"),
                     (Ok(()), Err(why)) => Leftover::Kept(why),
                 }
             }
             // A group outlives its leader: what the agent started may still work in its worktree. What its driver noted
             // is all that leads to a command in a group of its own once the agent has exited.
-            _ => match (kill_noted(&tree, &agent, worktree.as_deref()), left_of(&agent, worktree.as_deref())) {
+            // What the system took in only once nothing else keeps the session given up on.
+            _ => match (kill_noted(&tree, worktree.as_deref()), left_of(&agent, worktree.as_deref())) {
                 (Err(why), _) | (_, Left::Unknown(why)) => Leftover::Kept(why),
-                (Ok(noted), Left::Nothing) if noted.is_empty() => Leftover::Gone(FOUND_GONE),
-                (Ok(noted), Left::Nothing) => Leftover::Sent(noted),
+                (Ok(noted), Left::Nothing) => {
+                    let sent: Vec<_> = noted.into_iter().chain(kill_adopted(&agent, worktree.as_deref())).collect();
+                    if sent.is_empty() { Leftover::Gone(FOUND_GONE) } else { Leftover::Sent(sent) }
+                }
                 (Ok(noted), Left::Ours(members)) => {
                     for member in &members {
                         let _ = signal(member, libc::SIGKILL);
                     }
-                    Leftover::Sent(members.into_iter().chain(noted).collect())
+                    Leftover::Sent(members.into_iter().chain(noted).chain(kill_adopted(&agent, worktree.as_deref())).collect())
                 }
             },
         };
@@ -1084,11 +1087,11 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     }
 }
 
-/// Kills what a leftover `agent` left that its record leads to: each of `tree` that still runs, only while its pid has
-/// its start time, with the group it leads; the members of the group of each that has exited, as `left_of` takes a
-/// dead leader's; and what the system took in from it in its `worktree`. Those it sent a kill, or why one may be the
-/// person's: a stored pid can be hours old, and lead another group by now.
-fn kill_noted(tree: &[crate::process::Process], agent: &crate::process::Process, worktree: Option<&std::path::Path>) -> std::result::Result<Vec<crate::process::Process>, &'static str> {
+/// Kills what a leftover's stored `tree` leads to: each that still runs, only while its pid has its start time, with the
+/// group it leads; and the members of the group of each that has exited, as `left_of` takes a dead leader's, in its
+/// `worktree`. Those it sent a kill, or why one may be the person's: a stored pid can be hours old, and lead another
+/// group by now.
+fn kill_noted(tree: &[crate::process::Process], worktree: Option<&std::path::Path>) -> std::result::Result<Vec<crate::process::Process>, &'static str> {
     use crate::process::{Left, alive, kill_led_group, left_of, signal};
     let (mut sent, mut kept) = (vec![], None);
     for left in tree {
@@ -1111,7 +1114,6 @@ fn kill_noted(tree: &[crate::process::Process], agent: &crate::process::Process,
             Left::Unknown(why) => kept = Some(why),
         }
     }
-    sent.extend(kill_adopted(agent, worktree));
     kept.map_or(Ok(sent), Err)
 }
 
