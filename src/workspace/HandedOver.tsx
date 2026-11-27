@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AGENT_STOPPING, type Run } from "../types";
+import { AGENT_STOPPING, RESUMED_HERE, type Run } from "../types";
 import { Box, BoxTitle, Btn, CodeBox } from "./AgentSheet";
 import { useRuns } from "./runsStore";
 
@@ -15,20 +15,26 @@ export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void })
   const backend = useRuns((s) => s.backend);
   const [command, setCommand] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [tries, setTries] = useState(0);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
     let again: ReturnType<typeof setTimeout> | undefined;
     setCommand(null);
+    setRefused(null);
     // Asked again while the harness's own agent goes: the command is shown only once nothing else runs the session.
     const ask = () =>
       backend?.runsResumeCommand(run.id).then(
         (line) => live && (setCommand(line), setStopping(false)),
         (e: unknown) => {
           if (!live) return;
-          const waits = String(e instanceof Error ? e.message : e).includes(AGENT_STOPPING);
+          const said = String(e instanceof Error ? e.message : e);
+          const waits = said.includes(AGENT_STOPPING);
           setStopping(waits);
+          // Any other reason, an agent that may still run among them, stays until the run changes.
+          setRefused(waits ? null : said);
           if (waits) again = setTimeout(ask, 1000);
         },
       );
@@ -37,7 +43,7 @@ export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void })
       live = false;
       clearTimeout(again);
     };
-  }, [backend, run.id]);
+  }, [backend, run.id, run.lastDetail, tries]);
   const resume = async () => {
     setBusy(true);
     await useRuns.getState().takeBack(run.id);
@@ -52,6 +58,12 @@ export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void })
       <p className="m-0 text-sm text-ws-ink2">{HANDED_OVER_TEXT}</p>
       {command && <CodeBox text={command} what="the command" wrap />}
       {stopping && !command && <p className="m-0 text-sm text-ws-ink2">Stopping its agent…</p>}
+      {refused && !command && (
+        <p role="status" className="m-0 flex flex-wrap items-center gap-2 text-sm text-ws-ink2">
+          <span className="min-w-0 [overflow-wrap:anywhere]">Couldn't show the command: {refused}</span>
+          <Btn onClick={() => setTries((n) => n + 1)}>Retry</Btn>
+        </p>
+      )}
       {asking ? (
         <div role="group" aria-label="Resume here" className="grid gap-2">
           <p className="m-0 text-sm text-ws-ink">{RESUME_ASK}</p>
@@ -74,6 +86,45 @@ export function HandedOverBox({ run, onAttach }: { run: Run; onAttach(): void })
           </Btn>
         </div>
       )}
+    </Box>
+  );
+}
+
+/** A run Resume here took back: it waits at rest for your message, which starts its next turn. */
+export function ResumedHereBox({ run, answering }: { run: Run; answering: boolean }) {
+  const [text, setText] = useState("");
+  const ready = text.trim().length > 0 && !answering;
+  const send = () => {
+    if (!ready) return;
+    void useRuns
+      .getState()
+      .answer(run.id, text)
+      .then((ok) => ok && setText(""));
+  };
+  return (
+    <Box label="Resumed here">
+      <BoxTitle icon="play" tone="plain">
+        Resumed here
+      </BoxTitle>
+      <p className="m-0 text-sm text-ws-ink2">{RESUMED_HERE}</p>
+      <textarea
+        aria-label="Your message"
+        rows={3}
+        value={text}
+        disabled={answering}
+        placeholder="Write your message"
+        onChange={(ev) => setText(ev.target.value)}
+        onKeyDown={(ev) => {
+          if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) (ev.preventDefault(), send());
+        }}
+        className="w-full resize-y rounded-md border border-ws-sep2 bg-ws-win px-2.5 py-1.5 leading-normal text-ws-ink outline-offset-2 disabled:opacity-60"
+      />
+      <div>
+        <Btn tone="primary" icon="play" disabled={!ready} title={text.trim() ? undefined : "Write a message first"} onClick={send}>
+          {answering ? "Sending…" : "Send message"}
+        </Btn>
+      </div>
+      <p className="m-0 text-xs text-ws-ink3">Only the agent sees your message; nothing goes to Jira.</p>
     </Box>
   );
 }

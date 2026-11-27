@@ -2442,10 +2442,12 @@ async fn hand_over_refuses_a_message_until_resume_here_which_reopens_the_session
     assert!(!back.handed_over, "taken back");
     let resting = until_detail(&rig, &run, crate::runs::consumer::RESUMED_HERE).await;
     assert_eq!(resting.state, RunState::Done, "at rest for your message, not working");
+    assert!(resting.resumed_here, "the run sheet asks for your message");
     assert!(sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "reopened by its id");
     assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), NOT_HANDED_OVER);
     rig.svc.message_agent(&run.id, "Carry on.", crate::domain::Actor::Person).await.unwrap();
-    until_detail(&rig, &run, "Back again.").await;
+    let going = until_detail(&rig, &run, "Back again.").await;
+    assert!(!going.resumed_here, "its turn started");
     assert!(prompted(&served, &session, "Carry on.").await);
 }
 
@@ -2624,4 +2626,61 @@ async fn hand_over_resume_command_waits_until_the_harnesss_agent_has_gone() {
         Vec::new()
     }).await.unwrap();
     assert!(rig.svc.resume_command(&run.id).await.unwrap().contains("--resume"));
+}
+
+#[tokio::test]
+async fn hand_over_terminal_script_runs_claude_only_while_its_marker_is_there_and_a_take_back_removes_it() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, _) = handed_over_done(&served).await;
+    let marker = rig.svc.terminal_marker(&run);
+    assert!(marker.exists(), "Open in Terminal made it");
+    let script = rig.opened.0.lock().unwrap()[0].clone();
+    assert!(std::fs::read_to_string(&script).unwrap().contains(&format!("[ -e '{}' ]", marker.display())), "the script checks for it first");
+    rig.svc.take_back(&run.id).await.unwrap();
+    assert!(!marker.exists(), "the take back removed it");
+    // As a Terminal whose shell was slow to start runs it now.
+    let ran = std::process::Command::new("/bin/sh").arg(&script).output().unwrap();
+    assert!(ran.status.success());
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), crate::runs::control::TAKEN_BACK_HERE, "it ends there, and runs no claude: {}", String::from_utf8_lossy(&ran.stderr));
+}
+
+#[tokio::test]
+async fn hand_over_a_message_the_harness_drops_for_terminal_says_why_and_keeps_its_text() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, provider) = handed_over_done(&served).await;
+    rig.svc.take_back(&run.id).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::RESUMED_HERE).await;
+    // Terminal's claude came up after the take back's check.
+    let mut late = tokio::process::Command::new("/bin/sh").args(["-c", "sleep 30; true", "sh", "--resume", &provider]).kill_on_drop(true).spawn().unwrap();
+    let pid = late.id().unwrap();
+    tokio::time::timeout(WAIT, async {
+        let mut since: Option<std::time::Instant> = None;
+        while since.is_none_or(|since| since.elapsed() < std::time::Duration::from_millis(150)) {
+            match harness::process::holding(&provider, std::path::Path::new("/nowhere"), &[], &[], &[]) {
+                Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
+                _ => since = None,
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap();
+    let said = format!("Its agent {} (pid {pid}). Quit it there, then Resume here.", harness::session::STILL_IN_TERMINAL);
+    let dropped = until_detail(&rig, &run, &said).await;
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert!(rows.contains(&format!("{} Go on.", harness::session::NOT_SENT)), "{rows:?}");
+    assert!(!rows.iter().any(|text| text == crate::runs::consumer::NOT_DELIVERED), "not said as a session that ended: {rows:?}");
+    assert_eq!(dropped.last_detail.as_deref(), Some(said.as_str()));
+    late.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn hand_over_resume_command_names_why_when_the_harnesss_agent_may_still_run() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, _) = handed_over_done(&served).await;
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET given_up = 1, given_up_why = 'its agent would not stop' WHERE id = ?1", [&session]).unwrap();
+    let said = rig.svc.resume_command(&run.id).await.unwrap_err().to_string();
+    assert!(said.starts_with(HANDED_OVER_MAY_RUN) && said != AGENT_STOPPING, "{said}");
 }

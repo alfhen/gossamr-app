@@ -583,6 +583,8 @@ export interface Run {
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
+  /** Resume here took it back from Terminal, and it waits at rest for your message (`runsAnswer` sends it). */
+  resumedHere?: boolean;
   /** Its agent's permission requests that are still open, oldest first. Each is answered once, with `runsAnswerPermission`. */
   permissions?: PermissionRequest[];
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */

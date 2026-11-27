@@ -154,10 +154,24 @@ fn plain_words(words: &[String]) -> Result<String> {
 /// Writes `<dir>/<last word>-<digest>.command`: `cd` into the worktree, then the program with the backend's `words`
 /// that attach to the session. Nothing from a model or a ticket can be in it: the words are checked, and so are both paths.
 pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String]) -> Result<PathBuf> {
+    write_attach_guarded(dir, login, program, worktree, words, None)
+}
+
+/// What a take back says in a Terminal that had not yet started the session's `claude`.
+pub const TAKEN_BACK_HERE: &str = "Gossamr took this session back, so it isn't opened here.";
+
+/// `write_attach_file`, whose script first checks that `marker` still exists, and else exits with `TAKEN_BACK_HERE`:
+/// a take back removes it, so a Terminal whose shell was slow to start never resumes a session Gossamr took back.
+pub fn write_attach_guarded(dir: &Path, login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String], marker: Option<&Path>) -> Result<PathBuf> {
     let name = words.last().ok_or_else(|| refuse("that isn't a session"))?;
     let (program, worktree, words_text) = (quotable(program)?, quotable(worktree)?, plain_words(words)?);
     let login = login_lines(login)?;
-    write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
+    let guard = match marker {
+        // In double quotes: the words hold an apostrophe, and no `$`, backquote or backslash.
+        Some(marker) => format!("[ -e '{}' ] || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}\n", quotable(marker)?),
+        None => String::new(),
+    };
+    write_script(dir, name, &format!("#!/bin/zsh\n{guard}{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
 }
 
 impl Purpose {

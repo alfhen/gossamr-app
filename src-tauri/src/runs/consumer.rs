@@ -64,6 +64,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             // Resume here starts it with no prompt: it waits at rest for a message, which starts its turn.
             if taken_back && follow.answered.is_none() {
                 follow.resumed_here = true;
+                run.resumed_here = true;
                 run.last_detail = Some(RESUMED_HERE.into());
             } else {
                 reopen(run);
@@ -93,6 +94,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             rows.add("update", SLOT_WAIT, None);
         }
         // A message taken while the session was ending never reached the agent: say so where it is read.
+        Body::PromptsDropped if follow.held_in_terminal => follow.held_in_terminal = false,
         Body::PromptsDropped => {
             run.last_detail = Some(NOT_DELIVERED.into());
             rows.add("error", NOT_DELIVERED, None);
@@ -100,6 +102,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::TurnStarted => {
             follow.in_turn = true;
             follow.resumed_here = false;
+            run.resumed_here = false;
             follow.cut = None;
             reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
@@ -271,11 +274,20 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.ended_at = Some(now);
             rows.add("error", &reason, None);
         }
+        // The first prompt after a take back, dropped while Terminal may still run the session: the reason is the run's
+        // line, and an answer it held was not given, so the question shows again.
+        Body::Notice { text } if text.contains(harness::session::STILL_IN_TERMINAL) || text == harness::session::CANNOT_CHECK_TERMINAL => {
+            follow.held_in_terminal = true;
+            follow.answered = None;
+            run.last_detail = Some(cut(&redact(&text), DETAIL_KEPT));
+            rows.add("error", &text, None);
+        }
         Body::Notice { text } => rows.add("update", &text, None),
         // What a turn used is no row of the timeline.
         Body::Usage { .. } => {}
         Body::HandedOver => {
             run.handed_over = true;
+            run.resumed_here = false;
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
         }
@@ -283,6 +295,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // can be resumed, and its question stays until a `question_closed`.
         Body::Closed { by } => {
             follow.resumed_here = false;
+            run.resumed_here = false;
             // A message can no longer reach it, so the way out its failure names is the one that still works.
             if run.failure == Some(RunFailure::SigningNeedsYou) {
                 run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());

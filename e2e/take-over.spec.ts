@@ -21,6 +21,8 @@ test("Take over hands a finished run to Terminal, shows its resume command, refu
   await sheet.getByRole("button", { name: "Open in Terminal" }).first().click();
   const box = sheet.getByRole("group", { name: "Handed over to Terminal" });
   await expect(box).toContainText("Gossamr sends it no message until you resume it here.");
+  // The command shows only once the harness's own agent has gone.
+  await expect(box).toContainText("Stopping its agent…");
   await expect(box.locator("code")).toContainText("--resume");
   await expect(box.getByRole("button", { name: /Copy/ })).toBeVisible();
   await expect(card(page, "DEVOPS-490")).toContainText("Handed over to Terminal");
@@ -37,7 +39,12 @@ test("Take over hands a finished run to Terminal, shows its resume command, refu
   await ask.getByRole("button", { name: "Yes, resume here" }).click();
   await expect(box).toHaveCount(0);
   await expect(page.locator("[data-toast]").filter({ hasText: RESUMED_HERE })).toHaveCount(1);
-  expect(await message(page, id, "Go on.")).not.toBe(HANDED_OVER_ASK);
+  // It waits for your message, and the sheet asks for it.
+  const resumed = sheet.getByRole("group", { name: "Resumed here" });
+  await resumed.getByRole("textbox", { name: "Your message" }).fill("Go on.");
+  await resumed.getByRole("button", { name: "Send message" }).click();
+  await expect(resumed).toHaveCount(0);
+  expect((await runOf(page, "DEVOPS-490")).state).toBe("working");
 });
 
 test("a request Gossamr can only deny offers Take over in Terminal, which hands the run over", async ({ page }) => {

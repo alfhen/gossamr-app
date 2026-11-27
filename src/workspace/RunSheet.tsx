@@ -23,7 +23,7 @@ import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
 import { answerable, answerSentText, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
 import { RunAnswer } from "./RunAnswer";
-import { HandedOverBox } from "./HandedOver";
+import { HandedOverBox, ResumedHereBox } from "./HandedOver";
 import { PermissionAsk } from "./PermissionAsk";
 import { PermissionRequests, useClosingIn } from "./PermissionRequests";
 import { openPermissions } from "./permissionLogic";
@@ -153,6 +153,7 @@ function Attention({ run, label, opened, trust, answering, slotPlace, on }: { ru
     );
   // Its question is answered with I took it back; any other handed-over run waits for Resume here.
   if (run.handedOver && run.harnessSession && run.state !== "needsAnswer") return <HandedOverBox run={run} onAttach={on.attach} />;
+  if (run.resumedHere && run.harnessSession) return <ResumedHereBox run={run} answering={answering} />;
   switch (run.state) {
     case "needsPermission":
       return (
@@ -312,7 +313,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
   const title = runTitle(run, ticketTitle);
   // A request that closed under the pointer keeps its place until the pointer leaves, so the sheet below doesn't move up.
   const closing = useClosingIn(run, "sheet");
-  const attention = openPermissions(run).length > 0 || closing || ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run) || (!!run.handedOver && !!run.harnessSession);
+  const attention = openPermissions(run).length > 0 || closing || ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run) || (!!run.handedOver && !!run.harnessSession) || (!!run.resumedHere && !!run.harnessSession);
   const live = run.state === "working" ? progressText(run) : null;
   return (
     <SheetFrame

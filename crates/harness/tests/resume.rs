@@ -104,7 +104,8 @@ async fn resume_and_clean_up_of_a_session_a_shutdown_gave_up_on_are_refused() {
     next(&mut events).await;
     assert_eq!(harness.shutdown().await, std::slice::from_ref(&id), "the shutdown gave up on it");
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stuck))];
-    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    // Once the old store has let go of its lock.
+    let harness = Harness::new(reopen(&dir).await, drivers, settings(4));
     match harness.resume_with(&id, None).await {
         Err(Error::Refused(why)) => assert!(why.contains("a shutdown stopped waiting for it") && why.contains("may still run"), "{why}"),
         other => panic!("resumed: {:?}", other.is_ok()),
@@ -603,6 +604,7 @@ async fn a_holder_that_starts_after_the_take_back_has_the_first_prompt_refused_a
     let seen = until(&mut events, |body| matches!(body, Body::PromptsDropped)).await;
     let said = format!("Its agent {} (pid {}). Quit it there, then Resume here.", harness::session::STILL_IN_TERMINAL, late.pid());
     assert!(seen.iter().any(|event| event.body == Body::Notice { text: said.clone() }), "{seen:?}");
+    assert!(seen.iter().any(|event| event.body == Body::Notice { text: format!("{} first", harness::session::NOT_SENT) }), "the text it dropped is kept: {seen:?}");
     assert!(!seen.iter().any(|event| matches!(event.body, Body::Prompted { .. })), "nothing was sent");
     assert!(!mock.received(&ps).contains(&Command::Prompt("first".into())));
     drop(late);
@@ -635,4 +637,74 @@ async fn take_back_waits_for_no_claude_in_another_sessions_folder_inside_its_own
     settled(in_old.pid(), "no-such-id", &worktrees, &["claude"]);
     harness.take_back(&id).await.expect("neither works in this session's own folder");
     waits_for(harness.take_back(&other).await, in_other.pid());
+}
+
+#[tokio::test]
+async fn a_first_prompt_whose_check_for_terminal_cannot_be_made_is_dropped_unsent_and_the_next_is_checked_again() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, ps) = handed_over_in(&harness, folder.path()).await;
+    let mut events = harness.take_back(&id).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // A store that can't read its agents, as one that is failing does, while it still keeps events.
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("ALTER TABLE sessions RENAME COLUMN agent_pid TO agent_pid_away").unwrap();
+    harness.send(&id, "first").unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::PromptsDropped)).await;
+    assert!(seen.iter().any(|event| event.body == Body::Notice { text: harness::session::CANNOT_CHECK_TERMINAL.into() }), "{seen:?}");
+    assert!(!mock.received(&ps).contains(&Command::Prompt("first".into())), "not sent on a check that wasn't made");
+    raw.execute_batch("ALTER TABLE sessions RENAME COLUMN agent_pid_away TO agent_pid").unwrap();
+    harness.send(&id, "second").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+    assert!(mock.received(&ps).contains(&Command::Prompt("second".into())), "checked again, and sent");
+}
+
+#[test]
+fn the_check_for_terminal_counts_what_an_agent_of_the_harnesss_own_started_as_its_own() {
+    let id = "1b2c3d4e-0000-4000-8000-0000000000ac";
+    // A launcher that runs its `claude --resume <id>` as a child rather than in its own place.
+    let mut launcher = std::process::Command::new("/bin/sh");
+    launcher.args(["-c", &format!("/bin/sh -c 'sleep 30; true' sh --resume {id}; true")]);
+    let launcher = Held::start(&mut launcher);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let child = loop {
+        if let Some(child) = harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &[], &[]) {
+            break child;
+        }
+        assert!(std::time::Instant::now() < until, "the child never showed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    settled(child, id, std::path::Path::new("/nowhere"), &[]);
+    let ours = [harness::process::Process { pid: launcher.pid(), started: harness::process::started_of(launcher.pid()).unwrap() }];
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &ours, &[]), None, "the launcher's child is ours");
+}
+
+#[tokio::test]
+async fn take_back_waits_for_a_claude_a_shim_runs_from_its_package_in_the_sessions_folder_but_not_another_package() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, _) = handed_over_in(&harness, folder.path()).await;
+    // As pnpm's or cmd-shim's `claude`: a shell script that runs the package's `cli.js` with its interpreter.
+    let prefix = tempfile::tempdir().unwrap();
+    let script = |package: &str| {
+        let path = prefix.path().join("lib/node_modules").join(package).join("cli.js");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "sleep 30; true\n").unwrap();
+        path
+    };
+    let markers = harness::provider::Provider::Claude.markers();
+    let mut command = std::process::Command::new("/bin/sh");
+    command.arg(script("@anthropic-ai/claude-code")).arg("--continue").current_dir(folder.path());
+    let claude = Held::start(&mut command);
+    settled(claude.pid(), "no-such-id", folder.path(), markers);
+    waits_for(harness.take_back(&id).await, claude.pid());
+    drop(claude);
+    let mut other = std::process::Command::new("/bin/sh");
+    let _other = Held::start(other.arg(script("some-other-tool")).current_dir(folder.path()));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    harness.take_back(&id).await.expect("another package's cli.js is no claude");
 }

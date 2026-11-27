@@ -60,6 +60,16 @@ impl Provider {
         }
     }
 
+    /// What names this provider's program in a process: its program's name, and the part of a path a package manager
+    /// installs it under, as a shim's `node <prefix>/@anthropic-ai/claude-code/cli.js` shows.
+    pub fn markers(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &["claude", "@anthropic-ai/claude-code/"],
+            Self::Codex => &["codex", "@openai/codex/"],
+            Self::Gemini => &["agy"],
+        }
+    }
+
     pub fn binary(self) -> &'static str {
         match self {
             Self::Claude => "claude",

@@ -385,11 +385,13 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend || answering.has(id)) return false;
     set({ answering: new Set([...answering, id]) });
     const asked = (on: boolean) => set({ handedOverAsked: new Set([...get().handedOverAsked].filter((x) => x !== id).concat(on ? [id] : [])) });
+    // A run Resume here took back has no question: what you send is a message.
+    const message = !!get().runs.find((r) => r.id === id)?.resumedHere;
     try {
       const run = await backend.runsAnswer(id, text, options);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
       asked(false);
-      useToasts.getState().push(`${answerSentText(run)} Only the agent sees your answer; nothing goes to Jira.`, "info");
+      useToasts.getState().push(message ? "Message sent. Only the agent sees it; nothing goes to Jira." : `${answerSentText(run)} Only the agent sees your answer; nothing goes to Jira.`, "info");
       return true;
     } catch (e) {
       // The answer box asks whether you took it back, so a toast would only repeat it.

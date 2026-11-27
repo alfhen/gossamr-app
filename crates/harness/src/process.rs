@@ -144,23 +144,29 @@ fn cwd_of(pid: u32) -> Option<std::path::PathBuf> {
 }
 
 /// A process other than `ours` that still holds a session: one whose arguments hold its provider id `id`, as
-/// `claude --resume <id>` in Terminal does, or one of `programs` working inside its `folder` but not inside `skip`, the
+/// `claude --resume <id>` in Terminal does, or a provider's program working inside its `folder` but not inside `skip`, the
 /// folders of other sessions there. A shell left in the folder is no holder. Only this user's processes are read; one
-/// of `ours` counts as ours only while it is the same process, so a reused pid is a stranger.
-pub fn holding(id: &str, folder: &std::path::Path, programs: &[&str], ours: &[Process], skip: &[std::path::PathBuf]) -> Option<u32> {
+/// of `ours` counts as ours only while it is the same process, so a reused pid is a stranger. `markers` name the
+/// providers' programs: a name matches the program's file name, and a path part (one with a `/`) any argument of an
+/// interpreter, as a shim's `node <prefix>/@anthropic-ai/claude-code/cli.js` shows.
+pub fn holding(id: &str, folder: &std::path::Path, markers: &[&str], ours: &[Process], skip: &[std::path::PathBuf]) -> Option<u32> {
+    let (paths, programs): (Vec<&str>, Vec<&str>) = markers.iter().partition(|marker| marker.contains('/'));
     let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let folder = real(folder);
     let skip: Vec<std::path::PathBuf> = skip.iter().map(|path| real(path)).collect();
     let joined = format!("={id}");
     let me = std::process::id();
     let named = |path: &std::path::Path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| programs.contains(&name));
-    let is_ours = |pid: u32| ours.iter().any(|agent| agent.pid == pid && started_of(pid) == Some(agent.started));
+    let one_of_ours = |pid: u32| ours.iter().any(|agent| agent.pid == pid && started_of(pid) == Some(agent.started));
+    // What an agent of ours started counts as ours too, as the `claude` a launcher runs as its child does.
+    let is_ours = |pid: u32| std::iter::successors(Some(pid), |pid| parent_of(*pid).filter(|parent| *parent > 1)).take(32).any(one_of_ours);
     all_pids().into_iter().filter(|pid| *pid != me && !is_ours(*pid)).find(|pid| {
         let args = args_of(*pid).unwrap_or_default();
         let by_id = args.iter().skip(1).any(|arg| arg == id || arg.ends_with(&joined));
         // By the name it was started as too: an installed `claude` is a link to a file named by its version, and npm's
         // is a script `node` runs.
-        let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path)) || interpreted(&args).is_some_and(|script| named(std::path::Path::new(script)));
+        let packaged = interpreted(&args).is_some() && args.iter().skip(1).any(|arg| paths.iter().any(|part| arg.contains(part)));
+        let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path)) || interpreted(&args).is_some_and(|script| named(std::path::Path::new(script))) || packaged;
         by_id || provider && cwd_of(*pid).map(|cwd| real(&cwd)).is_some_and(|cwd| cwd.starts_with(&folder) && !skip.iter().any(|other| cwd.starts_with(other)))
     })
 }
@@ -173,7 +179,43 @@ fn interpreted(args: &[String]) -> Option<&str> {
     if !interpreter {
         return None;
     }
-    args.iter().skip(1).map(String::as_str).find(|arg| !arg.starts_with('-') && !(name == "env" && arg.contains('=')))
+    // The options that take the next argument as their value, which is not the script.
+    let takes_value: &[&str] = match name {
+        "node" | "bun" | "deno" => &["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "-C", "--conditions", "--title", "--inspect-port"],
+        "env" => &["-u", "--unset", "-S", "--split-string", "-C", "--chdir", "-P"],
+        "sh" | "bash" | "zsh" => &["-o", "+o", "-O", "+O"],
+        _ => &["-W", "-X"],
+    };
+    let mut rest = args.iter().skip(1).map(String::as_str);
+    while let Some(arg) = rest.next() {
+        if takes_value.contains(&arg) {
+            rest.next();
+        } else if !arg.starts_with('-') && !(name == "env" && arg.contains('=')) {
+            return Some(arg);
+        }
+    }
+    None
+}
+
+/// The parent of `pid`.
+#[cfg(target_os = "macos")]
+fn parent_of(pid: u32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `info` is as large as `size` says, and the call fills at most that much.
+    let got = unsafe { libc::proc_pidinfo(libc::c_int::try_from(pid).ok()?, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+    if got != size {
+        return None;
+    }
+    // SAFETY: the call filled the whole struct.
+    Some(unsafe { info.assume_init() }.pbi_ppid)
+}
+
+/// Field 4 of `/proc/<pid>/stat`.
+#[cfg(not(target_os = "macos"))]
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+    stat_tail(&stat)?.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Every pid this user may see.
@@ -663,6 +705,17 @@ pub mod seam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_script_an_interpreter_runs_is_its_first_word_that_is_no_option_nor_an_options_value() {
+        let script = |args: &[&str]| interpreted(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>()).map(str::to_owned);
+        assert_eq!(script(&["node", "/opt/bin/claude", "--continue"]).as_deref(), Some("/opt/bin/claude"));
+        assert_eq!(script(&["node", "--require", "/tmp/preload.cjs", "/opt/bin/claude", "--continue"]).as_deref(), Some("/opt/bin/claude"), "the preload is no script");
+        assert_eq!(script(&["/usr/bin/env", "-u", "NAME", "FOO=1", "claude"]).as_deref(), Some("claude"));
+        assert_eq!(script(&["python3", "-W", "ignore", "/x/claude"]).as_deref(), Some("/x/claude"));
+        assert_eq!(script(&["bash", "-o", "pipefail", "/x/claude"]).as_deref(), Some("/x/claude"));
+        assert_eq!(script(&["/opt/bin/claude", "--continue"]), None, "no interpreter");
+    }
 
     #[test]
     fn a_stat_line_is_read_past_a_command_name_of_any_bytes() {

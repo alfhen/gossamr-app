@@ -1,5 +1,5 @@
 import { denyOnlyWhy } from "../workspace/permissionLogic";
-import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, NOT_HANDED_OVER, RESUMED_HERE, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { AGENT_STOPPING, HANDED_OVER_ASK, HANDED_OVER_CLEANUP, NOT_HANDED_OVER, RESUMED_HERE, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -424,6 +424,8 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
 
 /** What a run on the harness says while it holds your answer, as `ANSWER_WAITS` in `runs/consumer.rs`. */
 const ANSWER_WAITS = "Your answer waits for the turn to end";
+/** How long the mock's harness agent takes to go after a hand-over. */
+const STOP_TAKES_MS = 1500;
 /** The same, for a session that closed before the answer reached the agent, as `ANSWER_WAITS_RESUME`. */
 const ANSWER_WAITS_RESUME = "Your answer waits for the session to resume";
 /** Why a message waits while the harness holds your answer, as `ANSWER_ON_ITS_WAY` in `runs/link.rs`. */
@@ -585,6 +587,8 @@ export class MockRuns {
   readonly attached: string[] = [];
   /** What Terminal was opened on for each run in `attached`: `codex resume` for a Codex run. */
   readonly attachCommands: string[] = [];
+  /** Runs handed over whose agent is still going, until when: the resume command waits for that, in real time. */
+  private readonly stoppingUntil = new Map<string, number>();
   /**
    * Waking a stopped session fails, as when `claude` exits or starts a copy: for a test to see what the person is left
    * with after a Deny or their own fix round whose wake didn't go through.
@@ -1149,6 +1153,14 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     if (run.handedOver && !tookBack) throw new Error(HANDED_OVER_ASK);
+    // As on the harness: a run Resume here took back takes your message as its next prompt.
+    if (run.resumedHere) {
+      const problem = answerProblem(text);
+      if (problem) throw new Error(problem);
+      const next = this.update(id, { state: "working", resumedHere: false, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: null });
+      this.changed();
+      return next;
+    }
     const again = run.state === "stopped" && !!run.unsentAnswer;
     if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "This run is asking permission, which is answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
     const problem = answerProblem(text);
@@ -1264,6 +1276,8 @@ export class MockRuns {
     this.attachCommands.push("claude --resume");
     if (run.handedOver) return;
     const cut = run.state === "needsPermission";
+    // As the harness's agent takes a moment to go, so the box says "Stopping its agent…" first.
+    this.stoppingUntil.set(run.id, Date.now() + STOP_TAKES_MS);
     this.update(run.id, { handedOver: true, lastDetail: "Handed over to Terminal", ...(cut ? { state: "stopped" as const, needs: null, permissions: [], endedAt: this.now() } : {}) });
     this.changed();
   }
@@ -1272,6 +1286,7 @@ export class MockRuns {
   resumeCommand(id: string): string {
     const run = this.get(id);
     if (!run?.harnessSession || !run.handedOver) throw new Error(NOT_HANDED_OVER);
+    if (Date.now() < (this.stoppingUntil.get(id) ?? 0)) throw new Error(AGENT_STOPPING);
     const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
     // The provider's own session id, as the harness's follow holds it, never the harness's.
     const provider = run.harnessSession.replace(/^hs-/, "1b2c3d4e-");
@@ -1283,7 +1298,7 @@ export class MockRuns {
     const run = this.get(id);
     if (!run?.harnessSession || !run.handedOver) throw new Error(NOT_HANDED_OVER);
     // As the harness's fold: it waits at rest, as it read when handed over, for a message to start its turn.
-    const next = this.update(id, { handedOver: false, lastDetail: RESUMED_HERE });
+    const next = this.update(id, { handedOver: false, resumedHere: true, lastDetail: RESUMED_HERE });
     this.changed();
     return next;
   }

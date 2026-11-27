@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HANDED_OVER_ASK, NOT_HANDED_OVER, RESUMED_HERE } from "../types";
-import { HANDED_OVER_TEXT, HandedOverBox } from "./HandedOver";
+import { AGENT_STOPPING, HANDED_OVER_ASK, NOT_HANDED_OVER, RESUMED_HERE } from "../types";
+import { HANDED_OVER_TEXT, HandedOverBox, ResumedHereBox } from "./HandedOver";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const seeded = () => new MockBackend({ runs: { seed: "harness", epoch: NOW } });
@@ -24,11 +24,21 @@ describe("a run handed over to Terminal", () => {
     await backend.runsAttach(done.id);
     expect(backend.runs.get(done.id)!.handedOver).toBe(true);
     expect(() => backend.runs.messageAgent(done.id, "Go on.")).toThrow(HANDED_OVER_ASK);
+    await expect(backend.runsResumeCommand(done.id)).rejects.toThrow(AGENT_STOPPING);
+    // Once the harness's agent has gone.
+    const later = Date.now() + 2000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(later);
     const line = await backend.runsResumeCommand(done.id);
+    clock.mockRestore();
     expect(line).toMatch(/^cd '.+' && '.+claude' '--resume' '1b2c3d4e-[^']+'$/);
     const back = await backend.runsTakeBack(done.id);
-    expect([back.handedOver, back.state, back.lastDetail]).toEqual([false, "done", RESUMED_HERE]);
+    expect([back.handedOver, back.resumedHere, back.state, back.lastDetail]).toEqual([false, true, "done", RESUMED_HERE]);
     await expect(backend.runsTakeBack(done.id)).rejects.toThrow(NOT_HANDED_OVER);
+    const html = renderToStaticMarkup(<ResumedHereBox run={back} answering={false} />);
+    expect(html).toContain('aria-label="Your message"');
+    expect(buttons(html)).toEqual(["Send message"]);
+    const going = await backend.runsAnswer(done.id, "Go on.");
+    expect([going.state, going.resumedHere]).toEqual(["working", false]);
   });
 
   it("in the mock, Take over hands over only a run with a request it can only deny, as the harness does", async () => {

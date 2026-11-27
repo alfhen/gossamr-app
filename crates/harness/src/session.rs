@@ -166,6 +166,10 @@ struct OpenRequest {
 
 /// Why a take back waits: a process still holds the session, as Terminal's `claude --resume` does.
 pub const STILL_IN_TERMINAL: &str = "still runs this session in Terminal";
+/// Why the first prompt after a take back is dropped when the check could not be made.
+pub const CANNOT_CHECK_TERMINAL: &str = "Gossamr couldn't check whether Terminal still runs this session. Try again.";
+/// Each prompt such a drop left unsent, after its reason.
+pub const NOT_SENT: &str = "Not sent:";
 
 /// What still holds session `id` other than the harness's own agents (and `also`, this start's), in the words a take
 /// back and its first prompt refuse with: its provider id in a process's arguments, or a provider's program in its
@@ -176,8 +180,8 @@ fn held_in_terminal(store: &Store, id: &str, row: &crate::store::SessionRow, als
     ours.extend(also.cloned());
     let mut skip: Vec<std::path::PathBuf> = store.session_folders()?.into_iter().filter(|(other, folder)| other != id && folder != &row.cwd && folder.starts_with(&row.cwd)).map(|(_, folder)| folder).collect();
     skip.push(row.cwd.join(".claude").join("worktrees"));
-    let programs = crate::provider::Provider::ALL.map(crate::provider::Provider::binary);
-    Ok(crate::process::holding(provider_session, &row.cwd, &programs, &ours, &skip).map(|pid| {
+    let markers: Vec<&str> = crate::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
+    Ok(crate::process::holding(provider_session, &row.cwd, &markers, &ours, &skip).map(|pid| {
         let label = crate::provider::Provider::named(&row.provider).map_or("Its agent", crate::provider::Provider::label);
         format!("{label} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.")
     }))
@@ -2125,8 +2129,16 @@ impl Task {
         // dropped, unsent, and the client hears why.
         if self.taken_back.load(Ordering::Relaxed) {
             let held = self.inner.with_store(|store| held_in_terminal(store, &self.id, &store.session(&self.id)?, link.process.as_ref()));
-            if let Ok(Some(words)) = held {
+            // Unchecked is not clear: the prompt waits for a check that could be made.
+            let refused = match held {
+                Ok(held) => held,
+                Err(_) => Some(CANNOT_CHECK_TERMINAL.to_owned()),
+            };
+            if let Some(words) = refused {
                 self.emit(Body::Notice { text: words });
+                for (text, _) in queued.iter() {
+                    self.emit(Body::Notice { text: format!("{NOT_SENT} {text}") });
+                }
                 self.drop_queued(queued);
                 self.emit(Body::PromptsDropped);
                 return Some(Turn::Idle);

@@ -69,7 +69,7 @@ pub const TAKE_OVER_ONLY_DENY: &str = "Take over is for a request Gossamr can on
 
 /// Why Take over opened no Terminal: the harness's agent had not gone yet, or may still run.
 pub const HANDED_OVER_NOT_GONE: &str = "It is handed over, but its agent hasn't stopped yet, so Terminal didn't open. Open in Terminal again once it has.";
-pub const HANDED_OVER_MAY_RUN: &str = "It is handed over, but its agent may still run, so Terminal didn't open:";
+pub const HANDED_OVER_MAY_RUN: &str = "It is handed over, but its agent may still run:";
 
 /// How long Terminal may take to start the `claude` the app opened it on.
 pub(super) const TERMINAL_STARTS_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -601,6 +601,12 @@ impl RunService {
     /// harness.
     pub(super) async fn take_back_on_harness(&self, run: &Run) -> Option<Result<Run>> {
         let (link, session) = self.on_harness_of(run)?;
+        // First, so a Terminal whose shell has not started its `claude` yet never does.
+        if let Err(e) = std::fs::remove_file(self.terminal_marker(run)) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Some(Err(e.into()));
+            }
+        }
         let opened = self.opened_terminal.lock().unwrap_or_else(|e| e.into_inner()).get(&run.id).copied();
         if opened.is_some_and(|at| at.elapsed() < self.terminal_grace) {
             return Some(Err(Error::Proposal(TERMINAL_OPENING.into())));
@@ -614,6 +620,11 @@ impl RunService {
             Err(why) if why.contains(harness::session::STILL_IN_TERMINAL) => Err(Error::Proposal(plain_refusal(&why, session))),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {}", plain_refusal(&why, session)))),
         })
+    }
+
+    /// The file a Terminal opened on run `run` checks for before it starts `claude`.
+    pub(super) fn terminal_marker(&self, run: &Run) -> std::path::PathBuf {
+        self.core.data_dir().join(super::control::ATTACH_DIR).join(format!("{}.open", run.id))
     }
 
     /// Refuses a take back while Claude's own listing on the run's login shows it still runs the session in Terminal.
@@ -695,14 +706,18 @@ impl RunService {
                     return Err(Error::Proposal(HANDED_OVER_NOT_GONE.into()));
                 }
                 if let Some(why) = link.kept(session).await {
-                    return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}", plain_refusal(&why, session))));
+                    return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}. Terminal didn't open.", plain_refusal(&why, session).trim_end_matches('.'))));
                 }
             }
             let tc = self.observing_toolchain(run).await?;
             let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
             let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
             let words = vec!["--resume".to_owned(), resumed_by];
-            let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run), &words)?;
+            // The script runs `claude` only while this exists, and a take back removes it first.
+            let marker = self.terminal_marker(run);
+            std::fs::DirBuilder::new().recursive(true).create(&dir)?;
+            std::fs::write(&marker, b"")?;
+            let file = super::control::write_attach_guarded(&dir, tc.login.as_ref(), &program, &session_folder(run), &words, Some(&marker))?;
             self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))?;
             self.opened_terminal.lock().unwrap_or_else(|e| e.into_inner()).insert(run.id.clone(), std::time::Instant::now());
             Ok(())
@@ -718,8 +733,11 @@ impl RunService {
         let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to resume.".into()))?;
         // Not while the harness's own agent may still run: two would write the session.
         let (link, _) = self.on_harness_of(&run).expect("checked above");
-        if !follow.closed || link.kept(session).await.is_some() {
+        if !follow.closed {
             return Err(Error::Proposal(AGENT_STOPPING.into()));
+        }
+        if let Some(why) = link.kept(session).await {
+            return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}", plain_refusal(&why, session))));
         }
         let tc = self.observing_toolchain(&run).await?;
         let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;

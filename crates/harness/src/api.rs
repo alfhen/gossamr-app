@@ -229,6 +229,9 @@ pub enum Op {
     /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
     /// over is refused: resume it. Refused, as `resume` is, while the rows say `held` or the row says `given_up`.
+    /// Refused while a process other than the harness's agents still holds the session ("still runs this session in
+    /// Terminal"). The new start's first prompt checks again, and is dropped unsent, with a notice saying why, while one
+    /// does or the check can't be made.
     TakeBack {
         session: String,
         /// With a value, who settles the agent's permission prompts from now on, as `open`'s `permissions`: it is kept

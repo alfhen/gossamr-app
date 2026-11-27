@@ -619,6 +619,9 @@ pub struct Run {
     /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// Resume here took it back from Terminal and it waits at rest for your message, which the run sheet asks for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resumed_here: bool,
     /// Its agent's permission requests that are still open, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<PermissionRequest>,
@@ -735,6 +738,7 @@ impl Run {
             announced_permissions: None,
             answer_waits: false,
             handed_over: false,
+            resumed_here: false,
             permissions: Vec::new(),
         }
     }
@@ -805,6 +809,10 @@ pub struct SessionFollow {
     /// its own or its `closed`.
     #[serde(default)]
     pub resumed_here: bool,
+    /// The harness dropped the first prompt after a take back because Terminal may still run the session: its notice
+    /// says why, so the drop that follows is not said again as a message the session ended before.
+    #[serde(default)]
+    pub held_in_terminal: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,
