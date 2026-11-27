@@ -328,6 +328,8 @@ impl Agent {
                     // Approvals are answered from H7b on.
                     Some(Command::Answer { .. }) => {}
                     Some(Command::Cancel) => self.rpc.cancel(),
+                    // Codex's own sandbox setting decides what it may do; Gossamr's choice is Claude's alone.
+                    Some(Command::SetPermissions(_)) => {}
                     Some(Command::Stop) => {
                         going = true;
                         self.go();
@@ -734,6 +736,7 @@ mod tests {
             model: None,
             login: None,
             effort: None,
+            permissions: Default::default(),
             resume: None,
             tools_token: crate::driver::Secret::random(),
             tools: crate::tools::ToolsEndpoint::unattached(),

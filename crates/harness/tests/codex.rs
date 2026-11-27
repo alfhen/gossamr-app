@@ -45,7 +45,7 @@ impl Run {
         tools.tools = vec![harness::tools::RESULT.into(), harness::tools::ASK.into()];
         tools.allowed = vec![tools.name.clone()];
         let (model, effort, resume) = (model.map(str::to_owned), effort.map(str::to_owned), resume.map(str::to_owned));
-        Launch { cwd: self.tmp.path().into(), locked: false, model, login: None, effort, resume, tools_token: self.token.clone(), tools, result_schema: None, env }
+        Launch { cwd: self.tmp.path().into(), locked: false, model, login: None, effort, permissions: Default::default(), resume, tools_token: self.token.clone(), tools, result_schema: None, env }
     }
 
     fn requests(&self) -> Vec<Value> {

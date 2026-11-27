@@ -605,6 +605,14 @@ pub struct Run {
     /// The harness session the run is, once it opened one. Its events decide the run's state from then on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session: Option<String>,
+    /// Who settles its agent's permission prompts, as the app last asked the harness: at the open, and with each
+    /// message, answer and resume since. None until its session opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_permissions: Option<crate::model_choice::AgentPermissions>,
+    /// The mode its timeline last said while the run worked or waited on you, so a change made while it was done is
+    /// said when it works again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_permissions: Option<crate::model_choice::AgentPermissions>,
     /// The harness took the person's answer to the open question, and it has not reached the agent yet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub answer_waits: bool,
@@ -723,6 +731,8 @@ impl Run {
             signing_key: None,
             in_work_folder: false,
             harness_session: None,
+            agent_permissions: None,
+            announced_permissions: None,
             answer_waits: false,
             handed_over: false,
             permissions: Vec::new(),

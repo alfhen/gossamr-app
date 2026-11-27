@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, broadcast, oneshot};
 
-use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, Secret, random_hex};
+use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, Permissions, Secret, random_hex};
 use crate::error::{Error, Result};
 use crate::event::{Body, ClosedBy, Decision, Event, FailKind, QuestionEnd, TurnEnd};
 use crate::redact;
@@ -171,6 +171,7 @@ enum Request {
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
+    SetPermissions(Permissions),
     /// A client's Stop, or the client a session ends with leaving: what its `closed` says.
     Stop(ClosedBy),
     HandOver,
@@ -193,6 +194,8 @@ pub struct Open {
     /// The login folder as typed; None is the provider's usual setup. See `Setup::agent_env`.
     pub login: Option<String>,
     pub effort: Option<String>,
+    /// Who settles a normal session's permission prompts first; kept, so each resume starts the same way.
+    pub permissions: Permissions,
     /// The clone and branch of a session that named a repo; `cwd` is then its worktree, which clean-up removes.
     pub work: Option<Work>,
     /// The tools the client offers; each call is a `client_tool_call` event it answers. See `tools::check_tools`.
@@ -264,6 +267,8 @@ impl Harness {
                 model: spec.model.as_deref(),
                 login: spec.login.as_deref(),
                 effort: spec.effort.as_deref(),
+                // A locked session's profile decides, so its row keeps what a switch would never change.
+                permissions: if spec.locked { Permissions::Ask } else { spec.permissions },
                 work: spec.work.as_ref(),
                 endpoint: Some(&endpoint),
                 tools: &spec.tools,
@@ -273,8 +278,8 @@ impl Harness {
             if spec.ends_with_client {
                 store.set_ends_with_client(&id)?;
             }
-            let Open { provider, cwd, locked, model, login, effort, notices, tools, result_schema, .. } = spec;
-            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: None, notices, endpoint, tools, result_schema })
+            let Open { provider, cwd, locked, model, login, effort, permissions, notices, tools, result_schema, .. } = spec;
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, permissions, resume: None, notices, endpoint, tools, result_schema })
         })?;
         Ok((id, events, feed.unwrap_or(Feed::Stored(second))))
     }
@@ -383,13 +388,13 @@ impl Harness {
                     endpoint
                 }
             };
-            let (provider, cwd, locked, model, login, effort) = (row.provider, row.cwd, row.locked, row.model, row.login, row.effort);
+            let (provider, cwd, locked, model, login, effort, permissions) = (row.provider, row.cwd, row.locked, row.model, row.login, row.effort, row.permissions);
             if let Some(schema) = &row.result_schema {
                 // A row from before the harness checked schemas may hold rules it would skip.
                 crate::schema::check(schema).map_err(|why| Error::Refused(format!("this session's result schema cannot be checked, so it is not resumed: {why}")))?;
             }
             let (tools, result_schema, resume) = (row.tools, row.result_schema, Some(provider_session));
-            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume, notices: Vec::new(), endpoint, tools, result_schema })
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, permissions, resume, notices: Vec::new(), endpoint, tools, result_schema })
         })?;
         Ok((events, second, after))
     }
@@ -501,6 +506,26 @@ impl Harness {
     /// Cancels the running turn, or a prompt that waits for a slot.
     pub fn cancel(&self, id: &str) -> Result<()> {
         self.request(id, Request::Cancel)
+    }
+
+    /// Who settles the session's permission prompts from now on: kept on its row for every later start, and sent to its
+    /// running agent, if one runs, ahead of anything asked after this. None changes nothing, and a locked session's
+    /// profile is never changed. Under the lock a start takes the session by, so a start that begins now reads the new
+    /// value or gets the request.
+    pub fn set_permissions(&self, id: &str, permissions: Option<Permissions>) -> Result<()> {
+        let Some(permissions) = permissions else { return Ok(()) };
+        let live = self.inner.live();
+        let locked = self.inner.with_store(|store| {
+            let row = store.session(id)?;
+            if !row.locked {
+                store.set_permissions(id, permissions)?;
+            }
+            Ok(row.locked)
+        })?;
+        if let Some(entry) = live.get(id).filter(|_| !locked) {
+            let _ = entry.requests.send(Request::SetPermissions(permissions));
+        }
+        Ok(())
     }
 
     /// Stops the session. It is closed once its agent has gone, which its `closed` event says; until then it takes no
@@ -838,7 +863,7 @@ impl Harness {
         let endpoints = self.inner.endpoints()?;
         #[cfg(test)]
         self.inner.hooks.before_reserve();
-        let Plan { driver, provider, cwd, locked, model, login, effort, resume, notices, endpoint, tools, result_schema } = {
+        let Plan { driver, provider, cwd, locked, model, login, effort, permissions, resume, notices, endpoint, tools, result_schema } = {
             let mut live = self.inner.live();
             if self.inner.closing.load(Ordering::Relaxed) {
                 return Err(Error::ShutDown);
@@ -871,7 +896,7 @@ impl Harness {
         let tools = endpoints.register(&endpoint, (id, start), &token, (tools, result_schema.clone()), calls, &provider);
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
         let schema = result_schema.clone();
-        let launch = Launch { cwd, locked, model, login, effort, resume, tools_token: token, tools, result_schema, env };
+        let launch = Launch { cwd, locked, model, login, effort, permissions, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
         // A first start that fails keeps its row's work: the caller discards the worktree, and if that fails, the
         // failed session's own clean-up removes it, as the owner while no session that ran names it.
@@ -1161,6 +1186,7 @@ struct Plan {
     model: Option<String>,
     login: Option<String>,
     effort: Option<String>,
+    permissions: Permissions,
     resume: Option<String>,
     endpoint: String,
     tools: Vec<ToolSpec>,
@@ -1714,6 +1740,9 @@ impl Task {
                             let _ = link.commands.send(Command::Cancel);
                         }
                     },
+                    Some(Request::SetPermissions(permissions)) => {
+                        let _ = link.commands.send(Command::SetPermissions(permissions));
+                    }
                     Some(Request::Answer { id, decision, message }) => {
                         let open = self.open_requests().remove(&id);
                         if let Some(OpenRequest { driver_id, .. }) = open

@@ -315,16 +315,16 @@ async fn resume_over_the_api_takes_back_resumes_and_refuses_with_the_reason() {
     next(&mut events).await;
     served.hand_over(&id).unwrap();
     until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
-    let refused = client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap_err().to_string();
+    let refused = client.call(Op::Resume { permissions: None, session: id.clone(), carry_on: None }).await.unwrap_err().to_string();
     assert!(refused.contains("handed over"), "{refused}");
-    let taken = client.call(Op::TakeBack { session: id.clone() }).await.unwrap();
+    let taken = client.call(Op::TakeBack { permissions: None, session: id.clone() }).await.unwrap();
     assert_eq!(taken["session"], id.as_str());
     served.close(&id).unwrap();
     let mut events = served.subscribe(&id).unwrap();
     until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
-    let stopped = client.call(Op::Resume { session: id.clone(), carry_on: Some("carry on".into()) }).await.unwrap_err().to_string();
+    let stopped = client.call(Op::Resume { permissions: None, session: id.clone(), carry_on: Some("carry on".into()) }).await.unwrap_err().to_string();
     assert!(stopped.contains("may not carry on: it was stopped"), "{stopped}");
-    let resumed = client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap();
+    let resumed = client.call(Op::Resume { permissions: None, session: id.clone(), carry_on: None }).await.unwrap();
     assert_eq!(resumed["session"], id.as_str());
     task.abort();
 }
@@ -358,7 +358,7 @@ async fn watch_a_resumed_session_reads_past_its_earlier_closed_and_ends_at_the_r
     closed(&served, &id, &mut events).await;
     let earlier = served.events(&id, 0).unwrap().iter().find(|event| matches!(event.body, Body::Closed { .. })).unwrap().seq;
     let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
-    client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap();
+    client.call(Op::Resume { permissions: None, session: id.clone(), carry_on: None }).await.unwrap();
     let resumed = |got: &[Event]| got.iter().any(|event| matches!(event.body, Body::Started { resumed: true, .. }) && event.seq > earlier);
     // While it runs, and once it has closed again: from the start, and from just before the earlier `closed`.
     let mut watchers = vec![];
@@ -433,7 +433,7 @@ async fn resume_over_the_api_watches_a_locked_sessions_new_start_so_the_carry_on
     let server = bind_again(bind).await;
     let task = tokio::spawn(server.run());
     let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
-    client.call(Op::Resume { session: id.clone(), carry_on: Some("go on".into()) }).await.unwrap();
+    client.call(Op::Resume { permissions: None, session: id.clone(), carry_on: Some("go on".into()) }).await.unwrap();
     // No `watch`: the resume watches the new start from its first event, whole, as it is a locked session's.
     let mut got = vec![];
     while !got.contains(&Body::Text { text: "two".into() }) {
