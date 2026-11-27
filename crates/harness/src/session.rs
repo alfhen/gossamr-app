@@ -1118,10 +1118,19 @@ fn kill_noted(tree: &[crate::process::Process], worktree: Option<&std::path::Pat
 }
 
 /// Kills what session `id`'s `agent` started in its `worktree` that runs on with the session's mark, each by pid and
-/// start time, children first. Those it sent a kill.
+/// start time, parents first. Those it sent a kill.
 fn kill_marked(id: &str, agent: &crate::process::Process, worktree: Option<&std::path::Path>) -> Vec<crate::process::Process> {
     let Some(worktree) = worktree else { return vec![] };
-    crate::process::marked_in(worktree, agent.started, id).into_iter().filter(|left| crate::process::signal(left, libc::SIGKILL).unwrap_or(false)).collect()
+    let mut sent: Vec<crate::process::Process> = vec![];
+    // Twice: a process may have forked after the first listing, before it was killed.
+    for _ in 0..2 {
+        for left in crate::process::marked_in(worktree, agent.started, id) {
+            if !sent.contains(&left) && crate::process::signal(&left, libc::SIGKILL).unwrap_or(false) {
+                sent.push(left);
+            }
+        }
+    }
+    sent
 }
 
 /// Whether the group `agent` led is empty by `until`, once `sent` were killed: it is listed again, and what a member

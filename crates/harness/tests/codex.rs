@@ -578,7 +578,7 @@ async fn codex_at_a_sessions_end_what_its_agent_left_in_its_worktree_goes_with_w
     // The app-server is among them too while it runs; the session's end looks once it has gone.
     let found = process::marked_in(&worktree, 0, &id);
     let at = |left: &Process| found.iter().position(|found| found == left);
-    assert!(at(&child).is_some_and(|child| at(&orphan).is_some_and(|orphan| child < orphan)), "the child before its parent: {found:?}");
+    assert!(at(&child).is_some_and(|child| at(&orphan).is_some_and(|orphan| orphan < child)), "the parent before its child: {found:?}");
     assert_eq!(at(&yours), None, "and not yours");
     harness.close(&id).unwrap();
     until(&mut events, |body| matches!(body, Body::Closed { .. })).await;

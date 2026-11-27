@@ -328,8 +328,9 @@ pub const SESSION_VARIABLE: &str = "GOSSAMR_SESSION";
 /// What `session`'s agent started that runs on: every process of yours that started at or after `since`, works in a
 /// folder inside `worktree` and started with the session's own `SESSION_VARIABLE`, whoever its parent is now. That is
 /// a job a command sent to the background before it exited, which neither the agent's tree nor any group it noted leads
-/// to any more, and what that job started in turn. Children come before their parents, so none is handed to pid 1
-/// between two kills. A command that clears its environment is not found, nor what it starts.
+/// to any more, and what that job started in turn. Parents come before their children, so a parent that restarts a
+/// child it lost, as a process supervisor does, is gone first. A command that clears its environment is not found, nor
+/// what it starts.
 pub fn marked_in(worktree: &std::path::Path, since: u64, session: &str) -> Vec<Process> {
     let Ok(within) = std::fs::canonicalize(worktree) else { return vec![] };
     let mark = format!("{SESSION_VARIABLE}={session}");
@@ -349,7 +350,7 @@ pub fn marked_in(worktree: &std::path::Path, since: u64, session: &str) -> Vec<P
     let of = |pid: u32| found.iter().find(|(process, _)| process.pid == pid);
     let depth = |pid: u32| std::iter::successors(Some(pid), |pid| of(*pid)?.1.filter(|parent| of(*parent).is_some())).take(found.len()).count();
     let mut ordered: Vec<(usize, Process)> = found.iter().map(|(process, _)| (depth(process.pid), process.clone())).collect();
-    ordered.sort_by_key(|(depth, _)| std::cmp::Reverse(*depth));
+    ordered.sort_by_key(|(depth, _)| *depth);
     ordered.into_iter().map(|(_, process)| process).collect()
 }
 
