@@ -593,7 +593,7 @@ impl Driver for Sleeper {
             unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
             drop(output);
         });
-        Ok(Link { commands, output: receiver, process: Some(agent) })
+        Ok(Link { commands, output: receiver, process: Some(agent), tree: None })
     }
 }
 
@@ -823,7 +823,7 @@ impl Driver for Leaver {
         let (commands, _) = tokio::sync::mpsc::unbounded_channel();
         let (output, receiver) = tokio::sync::mpsc::unbounded_channel();
         let _ = output.send(Body::Started { provider_session: format!("leaver-{}", leader.pid), resumed: false });
-        Ok(Link { commands, output: receiver, process: Some(leader) })
+        Ok(Link { commands, output: receiver, process: Some(leader), tree: None })
     }
 }
 

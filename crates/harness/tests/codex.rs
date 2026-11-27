@@ -333,6 +333,87 @@ async fn codex_a_live_leftovers_command_in_a_group_of_its_own_is_stopped_with_it
     drop(stdin);
 }
 
+/// The tree the store holds for session `id`, read beside the harness that holds the store.
+fn tree_on_record(data: &Path, id: &str) -> Option<Vec<Process>> {
+    let raw = rusqlite::Connection::open(data.join("harness.sqlite")).unwrap();
+    let tree: Option<String> = raw.query_row("SELECT agent_tree FROM sessions WHERE id = ?1", [id], |row| row.get(0)).unwrap();
+    tree.map(|tree| serde_json::from_str(&tree).unwrap())
+}
+
+#[tokio::test]
+async fn codex_a_running_sessions_noted_tree_is_on_record_until_it_closes() {
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[("FAKE_APP_SERVER_TURN", "command")], &out);
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: tmp.path().to_path_buf(), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !out.join("command.pid").exists() {
+        assert!(tokio::time::Instant::now() < given, "the fake started its command");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let command = process_in(&out, "command.pid");
+    while !tree_on_record(&data, &id).is_some_and(|tree| tree.contains(&command)) {
+        assert!(tokio::time::Instant::now() < given, "the command in a group of its own is on record beside its app-server");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&command, "the command").await;
+    assert_eq!(tree_on_record(&data, &id), None, "and off it once the session closed");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_an_exited_app_servers_command_is_stopped_from_its_record_and_a_reused_pid_in_it_never_signalled() {
+    use std::io::Write;
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // An app-server a dead harness left, in the middle of a command it started in a group of its own.
+    let mut left = std::process::Command::new(FAKE)
+        .arg("app-server")
+        .env("FAKE_APP_SERVER_OUT", &out)
+        .env("FAKE_APP_SERVER_TURN", "command")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut stdin = left.stdin.take().unwrap();
+    for line in [r#"{"id":1,"method":"initialize","params":{}}"#, r#"{"id":2,"method":"thread/start","params":{}}"#, r#"{"id":3,"method":"turn/start","params":{"threadId":"thr-fake-1"}}"#] {
+        writeln!(stdin, "{line}").unwrap();
+    }
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !out.join("command.pid").exists() {
+        assert!(tokio::time::Instant::now() < given, "the fake started its command");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (agent, command) = (Process { pid: left.id(), started: process::started_of(left.id()).unwrap() }, process_in(&out, "command.pid"));
+    // Then the app-server crashed on its own, and its command runs on: no process leads to it now.
+    left.kill().unwrap();
+    left.wait().unwrap();
+    assert!(process::alive(&command), "the command outlived its app-server");
+    let mut other = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+    let reused = Process { pid: other.id(), started: process::started_of(other.id()).expect("it runs").saturating_sub(3_600) };
+    let store = Store::open(&data).unwrap();
+    store.create_session("s", "codex", false, tmp.path(), None).unwrap();
+    store.set_agent("s", Some(&agent)).unwrap();
+    // The record's second process started an hour before the one that has its pid now.
+    store.set_agent_tree("s", &[command.clone(), reused]).unwrap();
+    let harness = harness_on(&data, store, &[], &out);
+    gone(&command, "the exited app-server's command").await;
+    assert_eq!(process::seam::sent_to(other.id()), Vec::<i32>::new(), "the reused pid was never signalled");
+    assert!(other.try_wait().unwrap().is_none(), "and its process runs on");
+    harness.shutdown().await;
+    assert_eq!(reopen(&data).await.agents().unwrap(), [], "nothing is left on record");
+    other.kill().unwrap();
+    other.wait().unwrap();
+    drop(stdin);
+}
+
 #[tokio::test]
 async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     // As `npm run dev &`: the command's shell exits, and the server it started lives on in the shell's group, no child of
@@ -354,6 +435,30 @@ async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     }
     stopped(&mut link).await;
     gone(&inner, "what the command left in its group").await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_on_linux_what_a_command_orphans_stays_in_app_servers_tree() {
+    let run = Run::new();
+    let mut link = driver().open(run.launch(&[("FAKE_APP_SERVER_TURN", "background")], None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    said_until(&mut link, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !run.out.join("inner.pid").exists() || std::fs::read_to_string(run.out.join("inner.pid")).unwrap().trim().is_empty() {
+        assert!(tokio::time::Instant::now() < given, "the shell started its sleep");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (server, inner) = (run.pid_of("pid"), run.pid_of("inner.pid"));
+    let shell: u32 = std::fs::read_to_string(run.out.join("shell.pid")).unwrap().trim().parse().unwrap();
+    while process::started_of(shell).is_some() {
+        assert!(tokio::time::Instant::now() < given, "the shell exited");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Its shell gone, the sleep is app-server's own: a subreaper takes in what its descendants orphan.
+    assert!(process::descendants(&server).contains(&inner), "the orphaned sleep is in app-server's tree");
+    stopped(&mut link).await;
+    gone(&inner, "the orphaned sleep").await;
 }
 
 #[tokio::test]

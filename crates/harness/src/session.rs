@@ -983,7 +983,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     // Those whose record could not be read, or whose end or giving up could not be written: none of them may be resumed.
     let (mut pending, mut checked) = (vec![], vec![]);
     for id in ids {
-        let crate::store::Recorded { agent, boot, worktree } = match store.agent(&id) {
+        let crate::store::Recorded { agent, boot, worktree, tree } = match store.agent(&id) {
             Ok(Some(found)) => found,
             Ok(None) => continue,
             Err(_) => {
@@ -997,34 +997,41 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
             (Some(was), Some(now)) if was != now => Leftover::Gone(FOUND_GONE),
             // Which boot it was is not known, so its start time proves nothing: only a pid and group that no longer
             // exist do.
-            (None, _) | (_, None) => match nothing_has(agent.pid) {
+            (None, _) | (_, None) => match nothing_has(agent.pid) && tree.iter().all(|left| nothing_has(left.pid)) {
                 true => Leftover::Gone(FOUND_GONE),
                 false => Leftover::Kept("it was recorded with no boot, and its pid or its group still answers"),
             },
-            // Its tree first, while the agent still leads it: a command it started in a group of its own, as Codex's
-            // are, is no member of its group. Each only while its pid still has its start time.
+            // Its tree first, while the agent still leads it, and what its driver noted: a command it started in a group
+            // of its own, as Codex's are, is no member of its group.
             _ if alive(&agent) => {
-                let tree = crate::process::descendants(&agent);
-                for member in &tree {
-                    let _ = signal(member, libc::SIGKILL);
-                    crate::process::kill_led_group(member);
+                let mut found = crate::process::descendants(&agent);
+                for left in tree {
+                    if !found.contains(&left) {
+                        found.push(left);
+                    }
                 }
+                let noted = kill_noted(&found);
                 match kill_group(&agent) {
-                    Ok(()) => Leftover::Sent(std::iter::once(agent.clone()).chain(tree).collect()),
+                    Ok(()) => Leftover::Sent(std::iter::once(agent.clone()).chain(noted).collect()),
                     Err(_) => Leftover::Kept("the harness could not kill its group"),
                 }
             }
-            // A group outlives its leader: what the agent started may still work in its worktree.
-            _ => match left_of(&agent, worktree.as_deref()) {
-                Left::Nothing => Leftover::Gone(FOUND_GONE),
-                Left::Ours(members) => {
-                    for member in &members {
-                        let _ = signal(member, libc::SIGKILL);
+            // A group outlives its leader: what the agent started may still work in its worktree. What its driver noted
+            // is all that leads to a command in a group of its own once the agent has exited.
+            _ => {
+                let noted = kill_noted(&tree);
+                match left_of(&agent, worktree.as_deref()) {
+                    Left::Nothing if noted.is_empty() => Leftover::Gone(FOUND_GONE),
+                    Left::Nothing => Leftover::Sent(noted),
+                    Left::Ours(members) => {
+                        for member in &members {
+                            let _ = signal(member, libc::SIGKILL);
+                        }
+                        Leftover::Sent(members.into_iter().chain(noted).collect())
                     }
-                    Leftover::Sent(members)
+                    Left::Unknown(why) => Leftover::Kept(why),
                 }
-                Left::Unknown(why) => Leftover::Kept(why),
-            },
+            }
         };
         checked.push((id, agent, worktree, check));
     }
@@ -1054,6 +1061,19 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     }
 }
 
+/// Kills each of `tree` that still runs, only while its pid has its start time, and the group each led: what an exited
+/// command started lives on in its group. Those it sent a kill.
+fn kill_noted(tree: &[crate::process::Process]) -> Vec<crate::process::Process> {
+    let mut sent = vec![];
+    for left in tree {
+        if crate::process::signal(left, libc::SIGKILL).unwrap_or(false) {
+            sent.push(left.clone());
+        }
+        crate::process::kill_led_group(left);
+    }
+    sent
+}
+
 /// Whether the group `agent` led is empty by `until`, once `sent` were killed: it is listed again, and what a member
 /// forked meanwhile is killed too, a few times. If not, why.
 fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, sent: &[crate::process::Process], until: std::time::Instant) -> std::result::Result<(), &'static str> {
@@ -1077,6 +1097,15 @@ fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, 
         }
     }
     Err("its group kept gaining processes after each kill")
+}
+
+/// The driver's noted tree each time it changes; never, for a driver that notes none or once it has stopped.
+async fn tree_changed(tree: &mut Option<tokio::sync::watch::Receiver<Vec<crate::process::Process>>>) -> Vec<crate::process::Process> {
+    let Some(noted) = tree else { return std::future::pending().await };
+    match noted.changed().await {
+        Ok(()) => noted.borrow_and_update().clone(),
+        Err(_) => std::future::pending().await,
+    }
 }
 
 /// How long the leftovers a harness kills as it starts have, all of them, to be gone before their sessions stay given up.
@@ -1598,6 +1627,10 @@ impl Task {
                         break 'run false;
                     }
                 },
+                // Kept beside the agent, so a harness after this one finds what it started once it has exited.
+                tree = tree_changed(&mut link.tree) => {
+                    let _ = self.inner.with_store(|store| store.set_agent_tree(&self.id, &tree));
+                }
                 granted = async { waiting.as_mut().expect("the branch runs only while waiting").await },
                     if waiting.is_some() && turn == Turn::Idle => {
                     waiting = None;
@@ -2482,7 +2515,7 @@ mod tests {
             let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
             if self.deaf.load(Ordering::Relaxed) {
                 drop(received);
-                return Ok(Link { commands, output: receiver, process: None });
+                return Ok(Link { commands, output: receiver, process: None, tree: None });
             }
             tokio::spawn(async move {
                 while let Some(command) = received.recv().await {
@@ -2498,7 +2531,7 @@ mod tests {
                     }
                 }
             });
-            Ok(Link { commands, output: receiver, process: None })
+            Ok(Link { commands, output: receiver, process: None, tree: None })
         }
     }
 
@@ -2571,7 +2604,7 @@ mod tests {
                 }
                 drop(output);
             });
-            Ok(Link { commands, output: receiver, process: None })
+            Ok(Link { commands, output: receiver, process: None, tree: None })
         }
     }
 

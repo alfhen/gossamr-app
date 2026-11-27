@@ -91,7 +91,7 @@ impl Driver for Stuck {
             while received.recv().await.is_some() {}
             std::future::pending::<()>().await;
         });
-        Ok(Link { commands, output: receiver, process: None })
+        Ok(Link { commands, output: receiver, process: None, tree: None })
     }
 }
 
