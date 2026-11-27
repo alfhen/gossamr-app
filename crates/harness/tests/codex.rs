@@ -416,15 +416,28 @@ async fn codex_an_exited_app_servers_command_is_stopped_from_its_record_and_a_re
 
 /// A `sleep 60` that a shell in `folder` sent to the background before it exited, in the shell's group: the system's
 /// now, as the person's own job or an agent's command left it.
-fn left_by_a_shell(folder: &Path) -> (u32, Process) {
+fn left_by_a_shell(folder: &Path, session: Option<&str>) -> (u32, Process) {
     use std::io::BufRead;
-    let script = format!("cd '{}' && /bin/sleep 60 & echo $!", folder.display());
-    let mut shell = std::process::Command::new("/bin/sh").args(["-c", &script]).stdout(std::process::Stdio::piped()).process_group(0).spawn().unwrap();
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let pid_file = folder.join(format!(".left-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    // Not `/bin/sleep`: macOS hides the environment of its own programs, so the harness could not tell whose it is.
+    let script = format!("cd '{}'; '{FAKE}' sleep 60 '{}' & echo $!", folder.display(), pid_file.display());
+    let mut shell = std::process::Command::new("/bin/sh");
+    shell.args(["-c", &script]).env_remove(process::SESSION_VARIABLE);
+    if let Some(session) = session {
+        shell.env(process::SESSION_VARIABLE, session);
+    }
+    let mut shell = shell.stdout(std::process::Stdio::piped()).process_group(0).spawn().unwrap();
     let mut line = String::new();
     std::io::BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
     let group = shell.id();
     shell.wait().unwrap();
     let pid: u32 = line.trim().parse().unwrap();
+    let given = std::time::Instant::now() + Duration::from_secs(10);
+    while !pid_file.exists() {
+        assert!(std::time::Instant::now() < given, "the sleep runs as itself");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     (group, Process { pid, started: process::started_of(pid).expect("the sleep runs") })
 }
 
@@ -445,7 +458,7 @@ fn end(left: &Process) {
 async fn codex_a_stored_command_whose_pid_now_leads_an_older_group_gets_nothing_signalled() {
     let (tmp, data) = data_dir();
     // The person's own group whose leader exited, its member running on, as a pipeline whose first command exited.
-    let (group, member) = left_by_a_shell(tmp.path());
+    let (group, member) = left_by_a_shell(tmp.path(), None);
     let store = Store::open(&data).unwrap();
     store.create_session("s", "codex", false, tmp.path(), None).unwrap();
     store.set_agent("s", Some(&exited())).unwrap();
@@ -466,11 +479,13 @@ async fn codex_at_a_restart_what_the_system_took_in_in_the_worktree_after_the_ag
     let (worktree, elsewhere) = (tmp.path().join("clone+worktrees").join("b"), tmp.path().join("elsewhere"));
     std::fs::create_dir_all(&worktree).unwrap();
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let (_, before) = left_by_a_shell(&worktree);
+    let (_, before) = left_by_a_shell(&worktree, Some("s"));
     // Start times are in seconds on macOS.
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let agent = exited();
-    let ((_, ours), (_, outside)) = (left_by_a_shell(&worktree), left_by_a_shell(&elsewhere));
+    let ((_, ours), (_, outside)) = (left_by_a_shell(&worktree, Some("s")), left_by_a_shell(&elsewhere, Some("s")));
+    // Yours, as a job you sent to the background in a Terminal opened there and then closed, and another session's.
+    let ((_, yours), (_, another)) = (left_by_a_shell(&worktree, None), left_by_a_shell(&worktree, Some("s2")));
     let store = Store::open(&data).unwrap();
     let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
     let new = harness::store::NewSession { provider: "codex", locked: false, cwd: &worktree, model: None, login: None, effort: None, permissions: Default::default(), work: Some(&work), endpoint: None, tools: &[], result_schema: None };
@@ -478,7 +493,7 @@ async fn codex_at_a_restart_what_the_system_took_in_in_the_worktree_after_the_ag
     store.set_agent("s", Some(&agent)).unwrap();
     let harness = harness_on(&data, store, &[], &tmp.path().join("out"));
     gone(&ours, "the job left in the worktree").await;
-    for (left, what) in [(&before, "one that started before the agent"), (&outside, "one outside the worktree")] {
+    for (left, what) in [(&before, "one that started before the agent"), (&outside, "one outside the worktree"), (&yours, "one without the session's mark"), (&another, "another session's")] {
         assert_eq!(process::seam::sent_to(left.pid), Vec::<i32>::new(), "{what} was never signalled");
         assert!(process::alive(left), "and runs on");
         end(left);
@@ -507,6 +522,28 @@ async fn codex_a_job_a_command_sent_to_the_background_in_a_session_of_its_own_go
     harness.close(&id).unwrap();
     until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
     gone(&escaped, "the job the command left").await;
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_at_a_sessions_end_what_the_system_took_in_from_you_in_its_worktree_runs_on() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // As `npm run dev &` in a Terminal opened in the worktree and then closed, or an editor started from there.
+    let ((_, yours), (_, another)) = (left_by_a_shell(&worktree, None), left_by_a_shell(&worktree, Some("another-session")));
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    for (left, what) in [(&yours, "yours"), (&another, "another session's")] {
+        assert_eq!(process::seam::sent_to(left.pid), Vec::<i32>::new(), "{what} was never signalled");
+        assert!(process::alive(left), "and runs on");
+        end(left);
+    }
     harness.shutdown().await;
 }
 

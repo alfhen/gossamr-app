@@ -321,18 +321,57 @@ pub fn descendants(process: &Process) -> Vec<Process> {
     found
 }
 
-/// What the system took in that started at or after `since` and works in a folder inside `worktree`: a job a command
-/// sent to the background before it exited, which neither the agent's tree nor any group it noted leads to any more.
-/// Orphans go to pid 1, launchd or init; on Linux a subreaper above the harness would take them instead.
-pub fn adopted_in(worktree: &std::path::Path, since: u64) -> Vec<Process> {
+/// The variable a session's agent starts with, set to the session's id. What its commands start inherits it, and what
+/// you start in the session's worktree does not, so it tells the agent's orphans from yours.
+pub const SESSION_VARIABLE: &str = "GOSSAMR_SESSION";
+
+/// What the system took in from `session`'s agent: started at or after `since`, working in a folder inside `worktree`,
+/// and started with the session's own `SESSION_VARIABLE`. That is a job a command sent to the background before it
+/// exited, which neither the agent's tree nor any group it noted leads to any more. Orphans go to pid 1, launchd or
+/// init; on Linux a subreaper above the harness would take them instead. A command that clears its environment is
+/// not found.
+pub fn adopted_in(worktree: &std::path::Path, since: u64, session: &str) -> Vec<Process> {
     let Ok(within) = std::fs::canonicalize(worktree) else { return vec![] };
+    let mark = format!("{SESSION_VARIABLE}={session}");
     children_of(1)
         .into_iter()
         .filter_map(|pid| {
             let started = started_of(pid).filter(|started| *started >= since)?;
-            cwd_of(pid)?.starts_with(&within).then_some(Process { pid, started })
+            let marked = environ_of(pid)?.split(|b| *b == 0).take_while(|entry| !entry.is_empty()).any(|entry| entry == mark.as_bytes());
+            (marked && cwd_of(pid)?.starts_with(&within)).then_some(Process { pid, started })
         })
         .collect()
+}
+
+/// The environment `pid` was started with, each entry ending in a NUL. Only your own processes can be read.
+#[cfg(target_os = "macos")]
+fn environ_of(pid: u32) -> Option<Vec<u8>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, libc::c_int::try_from(pid).ok()?];
+    let mut size: libc::size_t = 0;
+    // SAFETY: with no buffer, the call only writes the size it needs to `size`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    let mut args = vec![0u8; size];
+    // SAFETY: `args` is as large as `size` says, and the call fills at most that much and says how much in `size`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, args.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    args.truncate(size);
+    // argc, the executable's path, NULs to align, argc arguments, then the environment.
+    let argc = usize::try_from(i32::from_ne_bytes(args.get(..4)?.try_into().ok()?)).ok()?;
+    let mut rest = &args[4..];
+    rest = &rest[rest.iter().position(|b| *b == 0)?..];
+    rest = &rest[rest.iter().position(|b| *b != 0)?..];
+    for _ in 0..argc {
+        rest = &rest[rest.iter().position(|b| *b == 0)? + 1..];
+    }
+    Some(rest.to_vec())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn environ_of(pid: u32) -> Option<Vec<u8>> {
+    std::fs::read(format!("/proc/{pid}/environ")).ok()
 }
 
 #[cfg(target_os = "macos")]

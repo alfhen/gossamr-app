@@ -17,10 +17,14 @@
 //! instead, as an agent that will not stop does; with `FAKE_APP_SERVER_EXIT_ON_INTERRUPT` set, `turn/interrupt` makes it
 //! exit at once, as an app-server that crashed, leaving its sleep. `background` starts, in a group of its own, a shell
 //! that starts `sleep 60` a moment later, writes its pid to `inner.pid` and exits, as `npm run dev &` does: the sleep is
-//! then no child of app-server's, only a member of the shell's group. `escape` starts a shell that sends `sleep 60` to the
-//! background in a session of its own, writes its pid to `escaped.pid` and exits at once, before `item/started`: the sleep
-//! is then in no tree or group app-server leads to. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
+//! then no child of app-server's, only a member of the shell's group. `escape` starts a shell that sends this program's
+//! `sleep 60` to the background in a session of its own and exits at once; once the sleep has written its pid to
+//! `escaped.pid`, `item/started` follows. The sleep is then in no tree or group app-server leads to. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
 //! 900, and completes the turn once it is answered.
+//!
+//! `sleep <seconds> [<pid file>]` only sleeps, with no `FAKE_APP_SERVER_OUT` needed, once it has written its pid to the
+//! file. Unlike Apple's `/bin/sleep`, whose environment macOS hides from other processes, it shows the harness the
+//! environment it started with.
 
 use std::io::{BufRead, Write};
 use std::os::unix::process::CommandExt;
@@ -34,11 +38,19 @@ const CLIENT: &[&str] = &["initialize", "thread/start", "thread/resume", "turn/s
 const SERVER: &[&str] = &["item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval"];
 
 fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let ["sleep", seconds, ref pid_file @ ..] = argv.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        if let [pid_file] = pid_file {
+            let written = Path::new(pid_file).with_extension("part");
+            let _ = std::fs::write(&written, std::process::id().to_string()).and_then(|()| std::fs::rename(&written, pid_file));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(seconds.parse().unwrap_or(60)));
+        return ExitCode::SUCCESS;
+    }
     let Some(out) = std::env::var_os("FAKE_APP_SERVER_OUT").map(PathBuf::from) else {
         eprintln!("fake-codex-app-server: FAKE_APP_SERVER_OUT must be set");
         return ExitCode::from(2);
     };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     match argv.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["app-server", "generate-json-schema", "--out", folder] => schema(Path::new(folder)),
         ["app-server"] => serve(&out, &argv),
@@ -201,9 +213,15 @@ impl Fake {
         }
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("escape") {
             let escaped = self.out.join("escaped.pid");
-            let script = format!("/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec \"/bin/sleep\", \"60\"' & echo $! > '{}'", escaped.display());
+            let me = std::env::current_exe().unwrap_or_default();
+            let script = format!("/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' '{}' sleep 60 '{}' &", me.display(), escaped.display());
             if let Ok(mut shell) = std::process::Command::new("/bin/sh").args(["-c", &script]).process_group(0).spawn() {
                 let _ = shell.wait();
+            }
+            // Not before the sleep runs as itself: until then it is perl, whose environment macOS hides.
+            let given = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !escaped.exists() && std::time::Instant::now() < given {
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
             self.notify("item/started", json!({"threadId": thread, "turnId": turn, "item": {"type": "commandExecution", "id": format!("cmd-{n}"), "command": "sleep 60 &"}}));
             return;
