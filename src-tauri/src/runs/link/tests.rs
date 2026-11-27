@@ -842,14 +842,19 @@ async fn kept(bed: &Bed, session: &str) -> Value {
 
 #[tokio::test]
 async fn a_message_that_carried_the_old_choice_while_settings_changed_does_not_undo_the_change() {
-    let mut bed = Bed::new(THREE_TURNS).await;
+    let mut bed = Bed::new(r#"{"prompt": null}
+{"say": "Working."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#).await;
     let gated = Arc::new(Gated { direct: bed.direct.clone(), armed: Mutex::new(None), entered: tokio::sync::Notify::new() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
     bed.link = Link::start(bed.rig.fx.core.clone(), gated.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
     bed.link.set_permissions(AgentPermissions::Auto);
     let (run, session) = bed.started().await;
-    bed.until(&run, |run, _| run.state == RunState::Done || run.last_detail.as_deref() == Some("One.")).await;
+    bed.until(&run, |run, _| run.state == RunState::Working && run.last_detail.as_deref() == Some("Working.")).await;
     assert_eq!(kept(&bed, &session).await, "auto");
+    assert_eq!(bed.rig.get(&run).await.announced_permissions, Some(AgentPermissions::Auto), "it said its start's mode as it began to work");
     // A message reads Auto, then waits to connect while Settings change to Ask and that change reaches the harness.
     let release = gated.arm();
     let sending = Link { inner: bed.link.inner.clone() };
@@ -871,8 +876,9 @@ async fn a_message_that_carried_the_old_choice_while_settings_changed_does_not_u
     assert_eq!(kept(&bed, &session).await, "ask", "the message's Auto did not win");
     let now = bed.rig.get(&run).await;
     assert_eq!(now.agent_permissions, Some(AgentPermissions::Ask));
-    let rows = bed.rig.fx.core.run_events(&run.id).await.unwrap();
-    assert!(!rows.iter().any(|row| row.text == NOW_AUTO), "no line says Settings chose Auto");
+    assert_eq!(now.state, RunState::Working, "still in its turn");
+    let said: Vec<String> = bed.rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|row| row.text).filter(|text| text.starts_with("Permissions are now")).collect();
+    assert_eq!(said, [NOW_ASK], "one line, for the change that took, and none says Settings chose Auto");
 }
 
 #[tokio::test]

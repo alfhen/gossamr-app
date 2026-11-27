@@ -868,6 +868,22 @@ async fn a_change_of_settings_moves_a_finished_runs_open_session_with_no_line_on
 }
 
 #[tokio::test]
+async fn a_finished_run_that_wakes_in_a_mode_chosen_while_it_was_done_says_so_then() {
+    let served = Served::new(TALKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "First.").await;
+    until_state(&rig, &run, RunState::Done).await;
+    choose(&rig, AgentPermissions::Ask);
+    until_mode(&served, &rig, &run, AgentPermissions::Ask).await;
+    let said = |rows: Vec<crate::domain::RunEvent>| rows.into_iter().filter(|row| row.text.starts_with("Permissions are now")).map(|row| row.text).collect::<Vec<_>>();
+    assert_eq!(said(rig.fx.core.run_events(&run.id).await.unwrap()), Vec::<String>::new(), "nothing while it is done");
+    rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap();
+    until_detail(&rig, &run, "Second.").await;
+    assert_eq!(said(rig.fx.core.run_events(&run.id).await.unwrap()), [crate::runs::link::NOW_ASK], "said once, as it wakes");
+}
+
+#[tokio::test]
 async fn a_carry_on_after_a_harness_restart_starts_the_agent_in_the_mode_chosen_since() {
     let mut served = Served::new(BUILDS, 4);
     let rig = on_harness(&served).await;

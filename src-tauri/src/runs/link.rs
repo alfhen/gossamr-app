@@ -215,21 +215,13 @@ impl Link {
     }
 
     /// Keeps on the session's run what the harness was last asked for, for the run sheet to show.
-    /// A change after the first says so on the run's timeline: an answer, a take back or a change of Settings can move
-    /// a run's agent to another mode.
+    /// A change after the first says so on the run's timeline (`consumer::announce_permissions`): an answer, a take
+    /// back or a change of Settings can move a run's agent to another mode.
     async fn note_permissions(&self, session: &str, permissions: AgentPermissions) {
         let noted = self.inner.core.apply_session(session, move |run, _| {
-            let before = run.agent_permissions.replace(permissions);
-            // Said only of a run whose agent works or waits on you: one that is done takes it with its next message.
-            let busy = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked | RunState::Unknown);
-            if !busy || before.is_none_or(|before| before == permissions) {
-                return Vec::new();
-            }
-            let text = match permissions {
-                AgentPermissions::Auto => NOW_AUTO,
-                AgentPermissions::Ask => NOW_ASK,
-            };
-            vec![crate::domain::RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "update".into(), text: text.into(), detail: None }]
+            run.agent_permissions = Some(permissions);
+            let said = consumer::announce_permissions(run);
+            said.map(|text| crate::domain::RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "update".into(), text: text.into(), detail: None }).into_iter().collect()
         });
         match noted.await {
             Ok(Some(applied)) => self.inner.after(&applied.before, &applied.run),
