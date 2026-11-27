@@ -171,7 +171,8 @@ pub fn write_attach_guarded(dir: &Path, login: Option<&ProviderEnv>, program: &P
         Some(marker) => format!("[ -e '{}' ] || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}\n", quotable(marker)?),
         None => String::new(),
     };
-    write_script(dir, name, &format!("#!/bin/zsh\n{guard}{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
+    // Right before `exec`, so nothing between the check and `claude` can pause.
+    write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\n{guard}exec '{program}'{words_text}\n"))
 }
 
 impl Purpose {

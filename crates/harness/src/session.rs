@@ -402,8 +402,9 @@ impl Harness {
                 return Err(why);
             }
             let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
-            // Handed over, it may still run in Terminal: two agents on one session would write one transcript.
-            if taken_back && let Some(words) = held_in_terminal(store, id, &row, None)? {
+            // Handed over now or ever before, it may still run in Terminal: two agents on one session would write one
+            // transcript. Every resume asks, since a take back's start can end before its first prompt was checked.
+            if let Some(words) = held_in_terminal(store, id, &row, None)? {
                 return Err(Error::Refused(words));
             }
             let driver = self.driver(&row.provider)?;
@@ -923,6 +924,7 @@ impl Harness {
         let tools = endpoints.register(&endpoint, (id, start), &token, (tools, result_schema.clone()), calls, &provider);
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
         let schema = result_schema.clone();
+        let resumed = resume.is_some();
         let launch = Launch { cwd, locked, model, login, effort, permissions, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
         // A first start that fails keeps its row's work: the caller discards the worktree, and if that fails, the
@@ -987,7 +989,7 @@ impl Harness {
             result_schema: schema,
             broken: AtomicBool::new(false),
             ended,
-            taken_back: AtomicBool::new(taken_back),
+            check_terminal: AtomicBool::new(resumed),
         };
         for text in notices {
             task.emit(Body::Notice { text });
@@ -1429,8 +1431,9 @@ struct Task {
     broken: AtomicBool,
     /// How the agent's process ended, if its driver says.
     ended: oneshot::Receiver<AgentEnd>,
-    /// Taken back from Terminal, and no prompt sent yet: the first one checks again that nothing else holds it.
-    taken_back: AtomicBool,
+    /// Resumed, and no prompt sent yet: the first one checks again that nothing else holds it, as a Terminal that
+    /// started its `claude` after the resume's own check does.
+    check_terminal: AtomicBool,
 }
 
 /// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
@@ -2127,7 +2130,7 @@ impl Task {
     fn prompt(&self, link: &Link, queued: &mut VecDeque<(String, Option<String>)>) -> Option<Turn> {
         // A `claude` that Terminal started after the take back's own check would write beside this one: what waits is
         // dropped, unsent, and the client hears why.
-        if self.taken_back.load(Ordering::Relaxed) {
+        if self.check_terminal.load(Ordering::Relaxed) {
             let held = self.inner.with_store(|store| held_in_terminal(store, &self.id, &store.session(&self.id)?, link.process.as_ref()));
             // Unchecked is not clear: the prompt waits for a check that could be made.
             let refused = match held {
@@ -2143,7 +2146,7 @@ impl Task {
                 self.emit(Body::PromptsDropped);
                 return Some(Turn::Idle);
             }
-            self.taken_back.store(false, Ordering::Relaxed);
+            self.check_terminal.store(false, Ordering::Relaxed);
         }
         let (text, answers) = queued.pop_front().expect("a prompt is queued");
         if !self.emit(Body::Prompted { text: text.clone() }) {

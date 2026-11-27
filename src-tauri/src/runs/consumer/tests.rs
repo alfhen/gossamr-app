@@ -919,3 +919,14 @@ fn a_failed_between_turns_of_a_finished_run_says_so_and_leaves_it_done_but_a_set
     setup.play([Body::Failed { kind: FailKind::Provider, reason: "claude wouldn't start".into() }]);
     assert_eq!(setup.run.state, RunState::Failed, "a run that never began a turn still fails");
 }
+
+#[test]
+fn a_drop_for_terminal_names_why_and_a_dropped_text_that_quotes_those_words_is_only_its_own_row() {
+    let said = format!("Claude {} (pid 41). Quit it there, then Resume here.", harness::session::STILL_IN_TERMINAL);
+    let quoted = format!("{} Why does it say it {}?", harness::session::NOT_SENT, harness::session::STILL_IN_TERMINAL);
+    let mut played = Played::new();
+    played.play(started()).play([Body::Notice { text: said.clone() }, Body::Notice { text: quoted.clone() }, Body::PromptsDropped]);
+    assert_eq!(played.run.last_detail.as_deref(), Some(said.as_str()), "the harness's sentence is the run's line, not the quote");
+    assert!(played.rows.iter().any(|row| row.text == quoted && row.kind == "update"), "the dropped text is a row of its own");
+    assert!(!played.rows.iter().any(|row| row.text == NOT_DELIVERED), "not said as a session that ended");
+}

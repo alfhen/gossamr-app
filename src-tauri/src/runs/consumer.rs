@@ -276,7 +276,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         // The first prompt after a take back, dropped while Terminal may still run the session: the reason is the run's
         // line, and an answer it held was not given, so the question shows again.
-        Body::Notice { text } if text.contains(harness::session::STILL_IN_TERMINAL) || text == harness::session::CANNOT_CHECK_TERMINAL => {
+        // The harness's own sentence, not a dropped prompt that only quotes it.
+        Body::Notice { text } if !text.starts_with(harness::session::NOT_SENT) && (text.contains(harness::session::STILL_IN_TERMINAL) || text == harness::session::CANNOT_CHECK_TERMINAL) => {
             follow.held_in_terminal = true;
             follow.answered = None;
             run.last_detail = Some(cut(&redact(&text), DETAIL_KEPT));

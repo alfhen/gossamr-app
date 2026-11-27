@@ -154,7 +154,6 @@ pub fn holding(id: &str, folder: &std::path::Path, markers: &[&str], ours: &[Pro
     let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let folder = real(folder);
     let skip: Vec<std::path::PathBuf> = skip.iter().map(|path| real(path)).collect();
-    let joined = format!("={id}");
     let me = std::process::id();
     let named = |path: &std::path::Path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| programs.contains(&name));
     let one_of_ours = |pid: u32| ours.iter().any(|agent| agent.pid == pid && started_of(pid) == Some(agent.started));
@@ -162,10 +161,21 @@ pub fn holding(id: &str, folder: &std::path::Path, markers: &[&str], ours: &[Pro
     let is_ours = |pid: u32| std::iter::successors(Some(pid), |pid| parent_of(*pid).filter(|parent| *parent > 1)).take(32).any(one_of_ours);
     all_pids().into_iter().filter(|pid| *pid != me && !is_ours(*pid)).find(|pid| {
         let args = args_of(*pid).unwrap_or_default();
-        let by_id = args.iter().skip(1).any(|arg| arg == id || arg.ends_with(&joined));
+        // Anywhere in an argument: the script Terminal runs for a hand-over is named by the id too, so its shell holds
+        // the session from before it starts `claude`.
+        // An id too short to be told from an ordinary word names nothing; a provider's is a UUID.
+        let by_id = id.len() >= ID_LEAST && args.iter().skip(1).any(|arg| holds_word(arg, id));
         // By the name it was started as too: an installed `claude` is a link to a file named by its version, and npm's
         // is a script `node` runs.
-        let packaged = interpreted(&args).is_some() && args.iter().skip(1).any(|arg| paths.iter().any(|part| arg.contains(part)));
+        let in_package = |path: &str| paths.iter().any(|part| path.contains(part));
+        // The script as the system finds it too: a bin linked under another name to the package's `cli.js`.
+        let resolved = || {
+            let script = std::path::Path::new(interpreted(&args)?);
+            let script = if script.is_absolute() { script.to_owned() } else { cwd_of(*pid)?.join(script) };
+            std::fs::canonicalize(script).ok()
+        };
+        // The script it runs alone: an argument after it is the script's own.
+        let packaged = interpreted(&args).is_some_and(in_package) || resolved().is_some_and(|path| in_package(&path.to_string_lossy()));
         let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path)) || interpreted(&args).is_some_and(|script| named(std::path::Path::new(script))) || packaged;
         by_id || provider && cwd_of(*pid).map(|cwd| real(&cwd)).is_some_and(|cwd| cwd.starts_with(&folder) && !skip.iter().any(|other| cwd.starts_with(other)))
     })
@@ -195,6 +205,20 @@ fn interpreted(args: &[String]) -> Option<&str> {
         }
     }
     None
+}
+
+/// The shortest provider id the check looks for in other processes' arguments.
+const ID_LEAST: usize = 16;
+
+/// Whether `text` holds `word` with no letter or digit on either side, as a path or a `--resume=` names an id, and
+/// not as a part of a longer word does.
+fn holds_word(text: &str, word: &str) -> bool {
+    !word.is_empty()
+        && text.match_indices(word).any(|(at, _)| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + word.len()..].chars().next();
+            !before.is_some_and(|c| c.is_alphanumeric()) && !after.is_some_and(|c| c.is_alphanumeric())
+        })
 }
 
 /// The parent of `pid`.
@@ -705,6 +729,17 @@ pub mod seam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_id_is_held_only_as_a_word_of_its_own() {
+        let id = "1b2c3d4e-0000-4000-8000-000000000001";
+        assert!(holds_word(id, id));
+        assert!(holds_word(&format!("--resume={id}"), id));
+        assert!(holds_word(&format!("/data/attach/{id}-0123abcd.command"), id), "Terminal's script is named by it");
+        assert!(holds_word("--enable-features=Pen,hand", "hand"));
+        assert!(!holds_word("--enable-features=Handwriting,handwriting", "hand"), "part of a longer word");
+        assert!(!holds_word(&format!("{id}9"), id));
+    }
 
     #[test]
     fn the_script_an_interpreter_runs_is_its_first_word_that_is_no_option_nor_an_options_value() {

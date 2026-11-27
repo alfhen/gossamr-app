@@ -107,6 +107,9 @@ pub struct RunService {
     /// When this app last opened Terminal on each run's session, and how long a take back waits after that: Terminal
     /// may take seconds to start its `claude`, which no check sees before it has.
     pub(super) opened_terminal: Mutex<HashMap<String, Instant>>,
+    /// Held by Open in Terminal and by a take back of the same run, so neither reads the session while the other
+    /// changes it: Terminal never opens beside the agent a take back starts.
+    pub(super) handing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(super) terminal_grace: Duration,
 }
 
@@ -169,6 +172,7 @@ impl RunService {
             harness: None,
             catch_up: super::on_harness::CATCH_UP_TAKES_UP_TO,
             opened_terminal: Mutex::new(HashMap::new()),
+            handing: Mutex::new(HashMap::new()),
             terminal_grace: super::on_harness::TERMINAL_STARTS_WITHIN,
         }
     }

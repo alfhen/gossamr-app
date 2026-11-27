@@ -2606,6 +2606,7 @@ async fn hand_over_resume_here_waits_while_terminal_is_still_opening_the_run() {
     until_state(&rig, &run, RunState::Done).await;
     rig.svc.attach(&run.id).await.unwrap();
     assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), TERMINAL_OPENING, "its claude may not have started yet");
+    assert!(rig.svc.terminal_marker(&run).exists(), "a take back refused for it leaves Terminal free to open the session");
     assert_eq!(rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap_err().to_string(), TERMINAL_OPENING);
     tokio::time::sleep(grace).await;
     assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "once Terminal had time to start it");
@@ -2635,7 +2636,10 @@ async fn hand_over_terminal_script_runs_claude_only_while_its_marker_is_there_an
     let marker = rig.svc.terminal_marker(&run);
     assert!(marker.exists(), "Open in Terminal made it");
     let script = rig.opened.0.lock().unwrap()[0].clone();
-    assert!(std::fs::read_to_string(&script).unwrap().contains(&format!("[ -e '{}' ]", marker.display())), "the script checks for it first");
+    let body = std::fs::read_to_string(&script).unwrap();
+    let guard = format!("[ -e '{}' ]", marker.display());
+    let guard_line = body.lines().position(|line| line.starts_with(&guard)).expect("the script checks for it");
+    assert!(body.lines().nth(guard_line + 1).is_some_and(|line| line.starts_with("exec ")), "right before `claude`, so nothing can pause between: {body}");
     rig.svc.take_back(&run.id).await.unwrap();
     assert!(!marker.exists(), "the take back removed it");
     // As a Terminal whose shell was slow to start runs it now.
@@ -2683,4 +2687,39 @@ async fn hand_over_resume_command_names_why_when_the_harnesss_agent_may_still_ru
     raw.execute("UPDATE sessions SET given_up = 1, given_up_why = 'its agent would not stop' WHERE id = ?1", [&session]).unwrap();
     let said = rig.svc.resume_command(&run.id).await.unwrap_err().to_string();
     assert!(said.starts_with(HANDED_OVER_MAY_RUN) && said != AGENT_STOPPING, "{said}");
+}
+
+#[tokio::test]
+async fn hand_over_and_resume_here_of_one_run_wait_for_each_other() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, _) = handed_over_done(&served).await;
+    let rig = Arc::new(rig);
+    // As one of them holds it while the other is asked for.
+    let lock = rig.svc.handing_of(&run.id);
+    let held = lock.clone().lock_owned().await;
+    let taking = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.take_back(&id).await.map(|run| run.handed_over) }
+    });
+    let opening = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.attach(&id).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!taking.is_finished() && !opening.is_finished(), "neither reads the session while the other may change it");
+    drop(held);
+    let (taken, opened) = (taking.await.unwrap(), opening.await.unwrap());
+    let now = rig.get(&run).await;
+    assert_eq!(now.handed_over, rig.svc.terminal_marker(&run).exists(), "Terminal may open it only while it is handed over: {taken:?} {:?}", opened.err());
+}
+
+#[tokio::test]
+async fn hand_over_a_take_back_the_harness_refuses_for_its_own_agent_leaves_terminal_free_to_open_it() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, _) = handed_over_done(&served).await;
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET given_up = 1, given_up_why = 'its agent would not stop' WHERE id = ?1", [&session]).unwrap();
+    let refused = rig.svc.take_back(&run.id).await.unwrap_err().to_string();
+    assert!(refused.starts_with("The harness didn't take the session back"), "{refused}");
+    assert!(rig.svc.terminal_marker(&run).exists(), "nothing resumed, so Terminal may still open it");
 }

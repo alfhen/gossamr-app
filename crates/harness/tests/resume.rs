@@ -664,19 +664,27 @@ async fn a_first_prompt_whose_check_for_terminal_cannot_be_made_is_dropped_unsen
 #[test]
 fn the_check_for_terminal_counts_what_an_agent_of_the_harnesss_own_started_as_its_own() {
     let id = "1b2c3d4e-0000-4000-8000-0000000000ac";
-    // A launcher that runs its `claude --resume <id>` as a child rather than in its own place.
+    // A launcher that runs its `claude --resume <id>` as a child rather than in its own place; the child forks nothing.
     let mut launcher = std::process::Command::new("/bin/sh");
-    launcher.args(["-c", &format!("/bin/sh -c 'sleep 30; true' sh --resume {id}; true")]);
+    launcher.args(["-c", &format!("python3 -c 'import time; time.sleep(30)' --resume {id}; true")]);
     let launcher = Held::start(&mut launcher);
+    // Once the child has become python, whose parent is the launcher.
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let child = loop {
-        if let Some(child) = harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &[], &[]) {
-            break child;
+    loop {
+        let ps = std::process::Command::new("ps").args(["-axo", "ppid=,comm="]).output().unwrap();
+        let listing = String::from_utf8_lossy(&ps.stdout).into_owned();
+        let up = listing.lines().any(|line| {
+            let mut words = line.split_whitespace();
+            words.next().and_then(|ppid| ppid.parse::<u32>().ok()) == Some(launcher.pid()) && words.next().is_some_and(|comm| comm.to_ascii_lowercase().contains("python"))
+        });
+        if up {
+            break;
         }
-        assert!(std::time::Instant::now() < until, "the child never showed");
+        assert!(std::time::Instant::now() < until, "the child never became python");
         std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    settled(child, id, std::path::Path::new("/nowhere"), &[]);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &[], &[]).is_some(), "anyone else's would hold it");
     let ours = [harness::process::Process { pid: launcher.pid(), started: harness::process::started_of(launcher.pid()).unwrap() }];
     assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &ours, &[]), None, "the launcher's child is ours");
 }
@@ -703,8 +711,59 @@ async fn take_back_waits_for_a_claude_a_shim_runs_from_its_package_in_the_sessio
     settled(claude.pid(), "no-such-id", folder.path(), markers);
     waits_for(harness.take_back(&id).await, claude.pid());
     drop(claude);
+    // A bin linked under another name: only the path it resolves to names the package.
+    let linked = prefix.path().join("bin").join("cc");
+    std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(script("@anthropic-ai/claude-code"), &linked).unwrap();
+    let mut command = std::process::Command::new("/bin/sh");
+    command.arg(&linked).current_dir(folder.path());
+    let claude = Held::start(&mut command);
+    settled(claude.pid(), "no-such-id", folder.path(), markers);
+    waits_for(harness.take_back(&id).await, claude.pid());
+    drop(claude);
     let mut other = std::process::Command::new("/bin/sh");
     let _other = Held::start(other.arg(script("some-other-tool")).current_dir(folder.path()));
+    // Another script that is only given the package's path is no claude either.
+    let mut given = std::process::Command::new("/bin/sh");
+    let _given = Held::start(given.arg(script("watcher")).arg(script("@anthropic-ai/claude-code")).current_dir(folder.path()));
     std::thread::sleep(std::time::Duration::from_millis(300));
     harness.take_back(&id).await.expect("another package's cli.js is no claude");
+}
+
+#[tokio::test]
+async fn a_shell_running_the_script_terminal_got_holds_the_session_before_it_starts_claude() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, ps) = handed_over_in(&harness, folder.path()).await;
+    // As Terminal runs the hand-over's script, which is named by the session's id.
+    let scripts = tempfile::tempdir().unwrap();
+    let script = scripts.path().join(format!("{ps}-0123abcd.command"));
+    std::fs::write(&script, "sleep 30; true\n").unwrap();
+    let shell = Held::start(std::process::Command::new("/bin/sh").arg(&script));
+    settled(shell.pid(), &ps, std::path::Path::new("/nowhere"), &[]);
+    waits_for(harness.take_back(&id).await, shell.pid());
+}
+
+#[tokio::test]
+async fn a_resume_waits_for_a_holder_too_even_after_a_take_back_whose_start_ended_before_its_first_prompt() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, ps) = handed_over_in(&harness, folder.path()).await;
+    let mut events = harness.take_back(&id).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    closed(&harness, &id, &mut events).await;
+    // Terminal's claude came up after all, and the session is resumed the plain way.
+    let late = Held::start(&mut shell_with(&["--resume", &ps]));
+    settled(late.pid(), &ps, std::path::Path::new("/nowhere"), &[]);
+    match harness.resume_with(&id, None).await {
+        Err(Error::Refused(said)) => assert!(said.contains(harness::session::STILL_IN_TERMINAL), "{said}"),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+    drop(late);
+    let mut events = harness.resume_with(&id, None).await.expect("once it ended");
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
 }
