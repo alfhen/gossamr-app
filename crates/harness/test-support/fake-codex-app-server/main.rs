@@ -223,8 +223,8 @@ impl Fake {
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("escape") {
             let escaped = self.out.join("escaped.pid");
             let me = std::env::current_exe().unwrap_or_default();
-            let script = format!("/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' '{}' sleep 60 '{}' &", me.display(), escaped.display());
-            if let Ok(mut shell) = std::process::Command::new("/bin/sh").args(["-c", &script]).process_group(0).spawn() {
+            let script = r#"/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$1" sleep 60 "$2" &"#;
+            if let Ok(mut shell) = std::process::Command::new("/bin/sh").args(["-c", script, "sh"]).arg(me).arg(&escaped).process_group(0).spawn() {
                 let _ = shell.wait();
             }
             // Not before the sleep runs as itself: until then it is perl, whose environment macOS hides.

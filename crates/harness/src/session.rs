@@ -1688,10 +1688,7 @@ impl Task {
                         break 'run false;
                     }
                 },
-                // Kept beside the agent, so a harness after this one finds what it started once it has exited.
-                tree = tree_changed(&mut link.tree) => {
-                    let _ = self.inner.with_store(|store| store.set_agent_tree(&self.id, &tree));
-                }
+                tree = tree_changed(&mut link.tree) => self.keep_tree(&tree),
                 granted = async { waiting.as_mut().expect("the branch runs only while waiting").await },
                     if waiting.is_some() && turn == Turn::Idle => {
                     waiting = None;
@@ -1984,7 +1981,18 @@ impl Task {
     /// closed. The agent's own end of a turn a diagnostic already ended is passed over.
     async fn drain(&self, link: &mut Link, limit: Option<Duration>, going: &mut Going) -> bool {
         let gone = async {
-            while let Some(body) = link.output.recv().await {
+            loop {
+                // What the agent starts while it stops is kept too: a group that outlives the stop keeps the record.
+                let body = tokio::select! {
+                    body = link.output.recv() => match body {
+                        Some(body) => body,
+                        None => break,
+                    },
+                    tree = tree_changed(&mut link.tree) => {
+                        self.keep_tree(&tree);
+                        continue;
+                    }
+                };
                 match &body {
                     Body::Permission { .. } | Body::PermissionClosed { .. } => continue,
                     Body::Started { .. } => {
@@ -2267,6 +2275,14 @@ impl Task {
         }
         drop(watchers);
         let _ = self.events.send(event);
+    }
+
+    /// Keeps what the driver noted beside the agent, so a harness after this one finds what it started once it has
+    /// exited. The driver sends a tree only when it changes, so one the store would not take breaks the session.
+    fn keep_tree(&self, tree: &[crate::process::Process]) {
+        if let Err(e) = self.inner.with_store(|store| store.set_agent_tree(&self.id, tree)) {
+            self.store_failed(&e);
+        }
     }
 
     /// Breaks the session on a store that failed: its clients get one `failed`, numbered 0, and it stops.

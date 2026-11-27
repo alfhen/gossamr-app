@@ -432,11 +432,11 @@ fn shell_leaves(folder: &Path, session: Option<&str>, with_child: bool) -> (u32,
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let file = |what: &str| folder.join(format!(".{what}-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let (pid_file, child_file) = (file("left"), file("child"));
-    let child_arg = if with_child { format!(" '{}'", child_file.display()) } else { String::new() };
     // Not `/bin/sleep`: macOS hides the environment of its own programs, so the harness could not tell whose it is.
-    let script = format!("cd '{}'; '{FAKE}' sleep 60 '{}'{child_arg} & echo $!", folder.display(), pid_file.display());
+    // One command sent to the background, not a list: a list would run in a subshell, which is the system's then.
+    let script = r#"cd "$1" || exit; shift; "$@" & echo $!"#;
     let mut shell = std::process::Command::new("/bin/sh");
-    shell.args(["-c", &script]).env_remove(process::SESSION_VARIABLE);
+    shell.args(["-c", script, "sh"]).arg(folder).arg(FAKE).args(["sleep", "60"]).arg(&pid_file).args(with_child.then_some(&child_file)).env_remove(process::SESSION_VARIABLE);
     if let Some(session) = session {
         shell.env(process::SESSION_VARIABLE, session);
     }
