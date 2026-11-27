@@ -575,6 +575,10 @@ export interface Run {
   inWorkFolder?: boolean;
   /** The harness session the run is, once it opened one. */
   harnessSession?: string;
+  /** Who settles its agent's permission prompts, as Gossamr last asked the harness: at the start and with each message, answer and resume since. */
+  agentPermissions?: AgentPermissions;
+  /** The mode its timeline last said while it worked or waited on you. */
+  announcedPermissions?: AgentPermissions;
   /** The harness took your answer to its open question, and it has not reached the agent yet; `lastDetail` says so in words. */
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
@@ -881,7 +885,12 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
+  /** Who settles a Claude agent's permission prompts first; a backend that sent none has "auto". */
+  permissions?: AgentPermissions;
 }
+
+/** "auto": Claude Code's auto mode decides which steps are safe and runs them, a push or a reset among them. "ask": you're asked about each step. */
+export type AgentPermissions = "auto" | "ask";
 
 /** Who git commits as in `~/Gossamr/agents`, and whether the person's git settings choose that by folder. */
 export interface WorkFolderGit {

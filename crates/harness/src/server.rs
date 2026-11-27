@@ -438,7 +438,7 @@ impl Client {
         let harness = self.harness.clone();
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
-            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, ends_with_client, tools, result_schema } => {
+            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, permissions, ends_with_client, tools, result_schema } => {
                 self.captured().await;
                 harness.check_open(&provider, login.as_deref(), effort.as_deref())?;
                 crate::tools::check_tools(&tools, result_schema.as_ref())?;
@@ -453,7 +453,7 @@ impl Client {
                     }
                     _ => return Err(Error::Refused("give cwd or repo, and not both".into())),
                 };
-                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), notices, tools, result_schema };
+                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, permissions, work: work.clone(), notices, tools, result_schema };
                 // A clone can take minutes, and the token may have been revoked meanwhile. The clone stays, as the
                 // harness's own, for the next session; the worktree goes, and no session is made.
                 let opened = match harness.client_tokens().map(|tokens| tokens.iter().any(|token| token.stored_key == self.key)) {
@@ -476,25 +476,32 @@ impl Client {
                 self.watch(id.clone(), (vec![], false, 0), Some(events), 0);
                 Ok(json!({ "session": id }))
             }
-            Op::Send { session, text } => done(harness.send(&session, text)),
+            Op::Send { session, text, permissions } => {
+                harness.set_permissions(&session, permissions)?;
+                done(harness.send(&session, text))
+            }
             Op::Cancel { session } => done(harness.cancel(&session)),
+            Op::SetPermissions { session, permissions } => done(harness.set_permissions(&session, Some(permissions))),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
             // It may resume the session, which waits for the shell as an open does.
-            Op::AnswerQuestion { session, question, text } => {
+            Op::AnswerQuestion { session, question, text, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 done(harness.answer_question(&session, &question, text).await)
             }
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
             // Watched in the same step, as an open is, so a locked session's client misses none of the new start.
-            Op::Resume { session, carry_on } => {
+            Op::Resume { session, carry_on, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 let (feed, after) = harness.resume_watched(&session, carry_on, false)?;
                 self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
                 Ok(json!({ "session": session }))
             }
-            Op::TakeBack { session } => {
+            Op::TakeBack { session, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 let (feed, after) = harness.resume_watched(&session, None, true)?;
                 self.watch(session.clone(), (vec![], false, 0), Some(feed), after);

@@ -199,6 +199,9 @@ impl RunService {
     pub fn with_settings(self, settings: AgentSettings) -> Self {
         let settings = settings.clamped();
         *self.settings.lock().expect("settings lock poisoned") = settings;
+        if let Some(on) = &self.harness {
+            on.link.set_permissions(settings.permissions);
+        }
         self
     }
 

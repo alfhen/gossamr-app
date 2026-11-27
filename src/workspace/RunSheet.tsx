@@ -283,6 +283,11 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
         {run.state === "stopped" ? "Stopped" : ended ? "Finished" : "Started"} <b className="font-semibold text-ws-ink">{ageText(run, now)}</b>
       </span>
       {tokens && <span>{tokens}</span>}
+      {run.agentPermissions && (
+        <span data-agent-permissions title={run.agentPermissions === "auto" ? "Claude decides which steps are safe and runs them without asking you. Change it in Agent settings." : "You allow or deny each step that needs it. Change it in Agent settings."}>
+          Permissions <b className="font-semibold text-ws-ink">{run.agentPermissions === "auto" ? "Auto" : "Ask for each step"}</b>
+        </span>
+      )}
       {(run.passes ?? 1) > 1 && (
         <span data-passes title="How many times the agent has been given this job">
           Pass <b className="font-semibold text-ws-ink">{run.passes}</b>

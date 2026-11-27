@@ -87,9 +87,9 @@ impl Bed {
         let run = self.rig.set(&run, |r| r.state = RunState::Launching).await;
         let cwd = self.served._tmp.path().to_path_buf();
         let tools = vec![harness::tools::ToolSpec { name: "read_ticket".into(), description: String::new(), input_schema: json!({ "type": "object" }) }];
-        let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools, result_schema: None };
+        let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools, result_schema: None };
         let session = self.link.open(&run.id, open).await.unwrap();
-        self.link.call(Op::Send { session: session.clone(), text: "the brief".into() }).await.unwrap();
+        self.link.call(Op::Send { permissions: None, session: session.clone(), text: "the brief".into() }).await.unwrap();
         (run, session)
     }
 
@@ -173,7 +173,7 @@ async fn a_question_waits_on_the_person_and_its_answer_reaches_the_agent() {
     assert_eq!(asking.needs.as_deref(), Some("Which colour should the button be?"));
     assert!(bed.rig.noticed().contains(&(Attention::Needs, RunState::NeedsAnswer)));
     let question = follow.question.unwrap();
-    bed.link.call(Op::AnswerQuestion { session, question, text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question, text: "Blue".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
     assert_eq!((done.needs, follow.question), (None, None));
     bed.end().await;
@@ -220,7 +220,7 @@ async fn a_deny_leaves_a_question_whose_call_returned_open_and_its_answer_comes_
     let (denied, follow) = bed.until(&run, |_, f| f.turns == 1).await;
     assert_eq!((denied.state, denied.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour should the button be?")));
     assert_eq!(follow.question.as_deref(), Some(question.as_str()), "the deny closed no question");
-    bed.link.call(Op::AnswerQuestion { session, question, text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question, text: "Blue".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
     assert_eq!((done.needs, follow.question, done.last_detail.as_deref()), (None, None, Some("Blue it is.")));
     bed.end().await;
@@ -326,7 +326,7 @@ const THREE_TURNS: &str = r#"{"prompt": null}
 
 /// Sends a prompt on a client of the test's and waits on it for the turn's end.
 async fn turn_away(client: &mut Client, session: &str, text: &str) {
-    client.call(Op::Send { session: session.to_owned(), text: text.into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: session.to_owned(), text: text.into() }).await.unwrap();
     loop {
         if let Some(harness::client::Push::Event { event, .. }) = tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap() {
             if event.body.ends_turn() {
@@ -346,7 +346,7 @@ async fn events_the_harness_lost_are_named_once_each_time_and_the_run_reads_on_w
     // The first turn plays out before the app follows the session, and its record is then cut short.
     let mut client = bed.served.client().await;
     let cwd = bed.served._tmp.path().to_path_buf();
-    let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
+    let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None };
     let session = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();
     turn_away(&mut client, &session, "the brief").await;
     let first_end = bed.served.client().await.call(Op::Sessions).await.unwrap().as_array().unwrap().iter().find(|s| s["id"] == session.as_str()).unwrap()["last_seq"].as_u64().unwrap();
@@ -374,7 +374,7 @@ async fn events_the_harness_lost_are_named_once_each_time_and_the_run_reads_on_w
     );
 
     // It still follows the session: the next turn's events arrive.
-    bed.link.call(Op::Send { session: session.clone(), text: "and again".into() }).await.unwrap();
+    bed.link.call(Op::Send { permissions: None, session: session.clone(), text: "and again".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done && r.last_detail.as_deref() == Some("Three.")).await;
     assert_eq!((follow.lost, done.state), (2, RunState::Done));
     bed.end().await;
@@ -500,7 +500,7 @@ async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
     let connects = counting.at.lock().unwrap().len();
-    bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
     let (_, resumed) = bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1).await;
     assert!(resumed.seq > before);
     // On the watching connection as it was: the call's own connection is the one new one, and no reconnect came first.
@@ -805,4 +805,91 @@ async fn permission_a_run_saved_without_its_requests_reads_them_again_from_the_h
     bed.link.permit(&session, &after.permissions[0].id, Decision::Allow).await.unwrap();
     bed.until(&run, |r, _| r.state == RunState::Done).await;
     bed.end().await;
+}
+
+/// Connects as `Direct` does, but holds the first connect after `arm` until the test lets it go.
+struct Gated {
+    direct: Arc<Direct>,
+    armed: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    entered: tokio::sync::Notify,
+}
+
+impl Gated {
+    fn arm(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.armed.lock().unwrap() = Some(gate);
+        release
+    }
+}
+
+#[async_trait]
+impl Connect for Gated {
+    async fn connect(&self) -> Result<Client, String> {
+        let gate = self.armed.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.entered.notify_one();
+            let _ = gate.await;
+        }
+        self.direct.connect().await
+    }
+}
+
+/// The session's `permissions` as the harness lists it.
+async fn kept(bed: &Bed, session: &str) -> Value {
+    let listed = bed.served.client().await.call(Op::Sessions).await.unwrap();
+    listed.as_array().unwrap().iter().find(|row| row["id"] == session).expect("listed")["permissions"].clone()
+}
+
+#[tokio::test]
+async fn a_message_that_carried_the_old_choice_while_settings_changed_does_not_undo_the_change() {
+    let mut bed = Bed::new(r#"{"prompt": null}
+{"say": "Working."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#).await;
+    let gated = Arc::new(Gated { direct: bed.direct.clone(), armed: Mutex::new(None), entered: tokio::sync::Notify::new() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), gated.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    bed.link.set_permissions(AgentPermissions::Auto);
+    let (run, session) = bed.started().await;
+    bed.until(&run, |run, _| run.state == RunState::Working && run.last_detail.as_deref() == Some("Working.")).await;
+    assert_eq!(kept(&bed, &session).await, "auto");
+    assert_eq!(bed.rig.get(&run).await.announced_permissions, Some(AgentPermissions::Auto), "it said its start's mode as it began to work");
+    // A message reads Auto, then waits to connect while Settings change to Ask and that change reaches the harness.
+    let release = gated.arm();
+    let sending = Link { inner: bed.link.inner.clone() };
+    let message = tokio::spawn({
+        let session = session.clone();
+        async move { sending.call(Op::Send { permissions: None, session, text: "Pip's message".into() }).await }
+    });
+    tokio::time::timeout(WAIT, gated.entered.notified()).await.expect("the message is on its way");
+    bed.link.choose_permissions(AgentPermissions::Ask);
+    tokio::time::timeout(WAIT, async {
+        while kept(&bed, &session).await != "ask" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the change reached the harness");
+    release.send(()).unwrap();
+    message.await.unwrap().unwrap();
+    assert_eq!(kept(&bed, &session).await, "ask", "the message's Auto did not win");
+    let now = bed.rig.get(&run).await;
+    assert_eq!(now.agent_permissions, Some(AgentPermissions::Ask));
+    assert_eq!(now.state, RunState::Working, "still in its turn");
+    let said: Vec<String> = bed.rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|row| row.text).filter(|text| text.starts_with("Permissions are now")).collect();
+    assert_eq!(said, [NOW_ASK], "one line, for the change that took, and none says Settings chose Auto");
+}
+
+#[tokio::test]
+async fn an_op_the_harness_refused_before_it_kept_the_choice_leaves_the_runs_mode_as_it_was() {
+    let bed = Bed::new(THREE_TURNS).await;
+    let run = bed.rig.queued(1).await;
+    let run = bed.rig.set(&run, |r| r.state = RunState::Working).await;
+    // A session the harness has no row for, as after its sweep: it refuses at once, and keeps nothing.
+    bed.rig.fx.core.bind_run_session(&run.id, "s-gone").await.unwrap();
+    bed.link.set_permissions(AgentPermissions::Ask);
+    let refused = bed.link.call(Op::Send { permissions: None, session: "s-gone".into(), text: "hello".into() }).await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(bed.rig.get(&run).await.agent_permissions, None, "nothing was kept, so nothing is shown");
 }

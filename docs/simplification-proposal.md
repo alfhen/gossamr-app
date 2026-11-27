@@ -388,6 +388,8 @@ There is one line per empty state, with no explainers and no glossary. Two facts
 - Gossamr posts nothing to Jira or GitHub until you approve it.
 - Agents run with your own Claude Code settings, so they can push branches and use your own tools.
 
+Since H11c, which runs agents in Claude Code's auto mode by default, both facts also say what agents may do without asking and that Gossamr sets their permission mode from Agent settings; `brand/style-guide.md` has the current wording.
+
 Pip explains anything else when asked.
 
 ## 8. Backend surface after

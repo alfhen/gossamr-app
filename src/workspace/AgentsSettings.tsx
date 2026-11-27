@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { type AgentSettings, type Run, type WorkFolderGit } from "../types";
+import { type AgentPermissions, type AgentSettings, type Run, type WorkFolderGit } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { Icon } from "./AgentIcons";
 import { roleLabel } from "../lib/roles";
@@ -186,8 +186,14 @@ function WorkFolder({ git, onReveal }: { git: WorkFolderGit | null | undefined; 
 
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
-/** How many agents run at once and the terminal that opens sessions. */
+const PERMISSIONS_HINT: Record<AgentPermissions, string> = {
+  auto: "Claude decides which steps are safe and runs them without asking you. That can include force-pushing, resetting, running scripts from the internet and sending files to other sites.",
+  ask: "You allow or deny each step that needs it.",
+};
+
+/** How many agents run at once, the terminal that opens sessions, and who settles a Claude agent's permission prompts. */
 function AgentsForm({ settings, disabled, onSave }: { settings: AgentSettings; disabled: boolean; onSave(next: AgentSettings): void }) {
+  const permissions = settings.permissions ?? "auto";
   return (
     <div className="grid gap-2">
       <label className="flex flex-wrap items-center gap-2">
@@ -207,6 +213,16 @@ function AgentsForm({ settings, disabled, onSave }: { settings: AgentSettings; d
           <option value="terminal">Terminal</option>
           <option value="iTerm">iTerm</option>
         </select>
+      </label>
+      <label className="flex flex-wrap items-center gap-2">
+        <span className="min-w-[210px]">Claude agents&apos; permissions</span>
+        <select disabled={disabled} aria-label="Claude agents' permissions" value={permissions} onChange={(e) => onSave({ ...settings, permissions: e.target.value as AgentPermissions })} className={FIELD.replace("w-20", "w-44")}>
+          <option value="auto">Auto</option>
+          <option value="ask">Ask for each step</option>
+        </select>
+        <span data-permissions-hint className="text-sm text-ws-ink3">
+          {PERMISSIONS_HINT[permissions]}
+        </span>
       </label>
     </div>
   );

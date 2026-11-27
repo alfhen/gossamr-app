@@ -430,7 +430,7 @@ const ANSWER_WAITS_RESUME = "Your answer waits for the session to resume";
 const ANSWER_ON_ITS_WAY = "Your answer is on its way to the agent. Send more once it has arrived.";
 
 /** A run on the harness has its harness session and no Claude session id, as H10b writes it. */
-const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null });
+const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null, agentPermissions: "auto" as const });
 
 /** A long command, so the page is seen to show it whole. */
 export const LONG_COMMAND = "pnpm vitest run src/campaigns/sendTime.test.ts src/campaigns/schedule.test.ts --reporter=verbose && git add src/campaigns/sendTime.ts src/campaigns/sendTime.test.ts && git commit -m \"Pick each campaign's send time from the last 30 days of opens\"";
@@ -1154,7 +1154,7 @@ export class MockRuns {
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
     // The harness holds every answer until the agent's turn ends.
-    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? ANSWER_WAITS : null, answerWaits: run.harnessSession ? true : undefined, handedOver: false });
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? ANSWER_WAITS : null, answerWaits: run.harnessSession ? true : undefined, handedOver: false, ...(run.harnessSession ? { agentPermissions: this.limits.permissions ?? "auto" } : {}) });
     this.markStale(id);
     this.answeredAt.set(id, [...(this.answeredAt.get(id) ?? []), next.lastProgressAt]);
     this.changed();
@@ -1180,7 +1180,10 @@ export class MockRuns {
       this.answer(id, body, "pip");
       return "answered";
     }
+    // The backend sends the setting of the moment with each message to a run on the harness.
+    const mode: Partial<Run> = run.harnessSession ? { agentPermissions: this.limits.permissions ?? "auto" } : {};
     if (run.state === "working") {
+      if (run.harnessSession) this.update(id, mode);
       this.queued.set(id, body);
       this.workstreams?.record(ws, "pip", "agent_message_queued", { runId: id, detail: String([...body].length) });
       this.changed();
@@ -1193,7 +1196,7 @@ export class MockRuns {
     if (!run.shortId) throw new Error("It has no session to carry on in.");
     const passes = (run.passes ?? 1) + 1;
     this.followUps.set(id, [...(this.followUps.get(id) ?? []), { text: "Pip sent a message", detail: `Pass ${passes}.` }]);
-    this.update(id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading Pip's message" });
+    this.update(id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading Pip's message", ...mode });
     this.markStale(id);
     this.workstreams?.record(ws, "pip", "run_resumed", { runId: id, detail: String([...body].length) });
     this.changed();
@@ -1508,7 +1511,7 @@ export class MockRuns {
     };
   }
 
-  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream" };
+  private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream", permissions: "auto" };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
   /** The run of every answer tried, refused or not, oldest first. */
@@ -1531,7 +1534,14 @@ export class MockRuns {
       terminal: settings.terminal,
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
+      // A value the backend doesn't know asks for each step, as its config reader does.
+      permissions: settings.permissions === undefined ? "auto" : settings.permissions === "auto" ? "auto" : "ask",
     };
+    // As the backend sends a change to every session whose agent may run, mid-turn too.
+    const permissions = this.limits.permissions;
+    const live = this.runs.filter((r) => r.harnessSession && r.agentPermissions && r.agentPermissions !== permissions && ["working", "needsAnswer", "needsPermission", "systemBlocked", "unknown"].includes(r.state));
+    for (const run of live) this.update(run.id, { agentPermissions: permissions });
+    if (live.length) this.changed();
     return this.limits;
   }
 

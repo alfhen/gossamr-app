@@ -23,6 +23,7 @@ use super::consumer;
 use super::tracker::{Attention, RunNotifier};
 use crate::domain::{Run, RunState};
 use crate::inbox::Core;
+use crate::model_choice::AgentPermissions;
 
 /// How the link gets a connection the harness has proven. The token stays with whoever implements it.
 #[async_trait]
@@ -94,6 +95,14 @@ struct Inner {
     unread: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Calls of the app's tools whose answer is on its way, so a reconnect does not answer them again.
     answering: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Settings' choice of who settles a Claude agent's permission prompts, sent with each call that can reach or start
+    /// a session's agent, so a change reaches agents already started: the next message, answer, resume or take back.
+    permissions: std::sync::Mutex<AgentPermissions>,
+    /// One change of the choice is sent to the sessions at a time, each with the choice of that moment, so a quick
+    /// second change is never overtaken by the first.
+    choosing: tokio::sync::Mutex<()>,
+    /// The runtime the link started on: a change of Settings comes from a thread that has none.
+    runtime: tokio::runtime::Handle,
     /// How many of the next follows fail, for a test of what a failed follow leaves.
     #[cfg(test)]
     failing_follows: std::sync::atomic::AtomicUsize,
@@ -103,7 +112,7 @@ impl Link {
     /// Starts the watching task, which follows every session the app's runs still follow.
     pub fn start(core: Arc<Core>, connect: Arc<dyn Connect>, tools: Arc<dyn ClientTools>, notifier: Arc<dyn RunNotifier>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Link {
         let (commands, received) = mpsc::unbounded_channel();
-        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), #[cfg(test)] failing_follows: Default::default() });
+        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), permissions: std::sync::Mutex::new(AgentPermissions::Ask), choosing: tokio::sync::Mutex::new(()), runtime: tokio::runtime::Handle::current(), #[cfg(test)] failing_follows: Default::default() });
         tokio::spawn(watching(Arc::downgrade(&inner), received));
         Link { inner }
     }
@@ -113,7 +122,7 @@ impl Link {
     /// from what was applied: none of the new start's events is missed, and none applied twice.
     pub async fn call(&self, op: Op) -> Result<Value, String> {
         let resumes = match &op {
-            Op::AnswerQuestion { session, .. } | Op::Resume { session, .. } | Op::TakeBack { session } | Op::Send { session, .. } => Some(session.clone()),
+            Op::AnswerQuestion { session, .. } | Op::Resume { session, .. } | Op::TakeBack { session, .. } | Op::Send { session, .. } => Some(session.clone()),
             _ => None,
         };
         let answered = self.ask(op).await?;
@@ -127,9 +136,98 @@ impl Link {
     }
 
     /// The harness's answer to `op`, and nothing more: `call` without its follow.
-    async fn ask(&self, op: Op) -> Result<Value, String> {
+    async fn ask(&self, mut op: Op) -> Result<Value, String> {
+        let now = self.permissions();
+        let asked = match &mut op {
+            Op::Send { session, permissions, .. } | Op::AnswerQuestion { session, permissions, .. } | Op::Resume { session, permissions, .. } | Op::TakeBack { session, permissions } => {
+                Some((session.clone(), *permissions.get_or_insert(now)))
+            }
+            Op::SetPermissions { session, permissions } => Some((session.clone(), *permissions)),
+            _ => None,
+        };
+        let answered = self.ask_once(op).await;
+        let Some((session, mut sent)) = asked else { return answered };
+        let mut kept = answered.is_ok();
+        // Settings may have changed while the call was on its way, and the harness applies its value after the
+        // change's own: send the choice of now, until what was sent last is still the choice.
+        loop {
+            let now = self.permissions();
+            if now == sent {
+                break;
+            }
+            sent = now;
+            kept = self.ask_once(Op::SetPermissions { session: session.clone(), permissions: now }).await.is_ok();
+        }
+        // A refused op may or may not have kept the choice: the harness's row says which. A choice made since this
+        // call was sent is noted by its own call, so this one never writes an older value over it.
+        let noted = match kept {
+            true => Some(sent).filter(|sent| *sent == self.permissions()),
+            false => self.kept_permissions(&session).await,
+        };
+        if let Some(permissions) = noted {
+            self.note_permissions(&session, permissions).await;
+        }
+        answered
+    }
+
+    async fn ask_once(&self, op: Op) -> Result<Value, String> {
         let mut client = self.inner.connect.connect().await?;
         client.call(op).await.map_err(|e| e.to_string())
+    }
+
+    /// What the harness keeps for the session, if it can say.
+    async fn kept_permissions(&self, session: &str) -> Option<AgentPermissions> {
+        let listed = self.ask_once(Op::Sessions).await.ok()?;
+        let row = listed.as_array()?.iter().find(|row| row["id"] == session)?;
+        serde_json::from_value(row["permissions"].clone()).ok()
+    }
+
+    /// Settings' choice of who settles a Claude agent's permission prompts, from now on, for the calls that follow.
+    pub fn set_permissions(&self, permissions: AgentPermissions) {
+        *self.inner.permissions.lock().unwrap_or_else(|p| p.into_inner()) = permissions;
+    }
+
+    /// As `set_permissions`, and sent at once to every session the app follows whose agent may run, so an agent in
+    /// the middle of a turn switches then, not at its next message. One the harness cannot reach takes it with its
+    /// next message, answer or resume.
+    pub fn choose_permissions(&self, permissions: AgentPermissions) {
+        if self.permissions() == permissions {
+            return;
+        }
+        self.set_permissions(permissions);
+        let link = Link { inner: self.inner.clone() };
+        self.inner.runtime.spawn(async move {
+            let _one_at_a_time = link.inner.choosing.lock().await;
+            let followed = match link.inner.core.followed_sessions().await {
+                Ok(followed) => followed,
+                Err(e) => return eprintln!("couldn't read the sessions to send agents' permissions to: {e}"),
+            };
+            for (session, _) in followed.into_iter().filter(|(_, follow)| !follow.closed) {
+                if let Err(why) = link.ask(Op::SetPermissions { session: session.clone(), permissions: link.permissions() }).await {
+                    eprintln!("couldn't send agents' permissions to session {session}; it takes them with its next message: {why}");
+                }
+            }
+        });
+    }
+
+    pub fn permissions(&self) -> AgentPermissions {
+        *self.inner.permissions.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Keeps on the session's run what the harness was last asked for, for the run sheet to show.
+    /// A change after the first says so on the run's timeline (`consumer::announce_permissions`): an answer, a take
+    /// back or a change of Settings can move a run's agent to another mode.
+    async fn note_permissions(&self, session: &str, permissions: AgentPermissions) {
+        let noted = self.inner.core.apply_session(session, move |run, _| {
+            run.agent_permissions = Some(permissions);
+            let said = consumer::announce_permissions(run);
+            said.map(|text| crate::domain::RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "update".into(), text: text.into(), detail: None }).into_iter().collect()
+        });
+        match noted.await {
+            Ok(Some(applied)) => self.inner.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("couldn't keep the permissions of session {session} on its run: {e}"),
+        }
     }
 
     /// Makes the next `n` follows fail, as a watch the harness refused would.
@@ -142,6 +240,10 @@ impl Link {
     /// before any of its events is applied, and the app listens for its tool calls before it is sent a prompt.
     /// Its error is in the app's words, for the run to show.
     pub async fn open(&self, run_id: &str, op: Op) -> Result<String, String> {
+        let asked = match &op {
+            Op::Open { permissions, .. } => Some(*permissions),
+            _ => None,
+        };
         let opened = self.call(op).await.map_err(|e| format!("it didn't open a session: {e}"))?;
         let session = opened["session"].as_str().ok_or("it answered an open with no session")?.to_owned();
         let bound = self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| {
@@ -156,6 +258,9 @@ impl Link {
             // A session no run follows is one nothing would stop or clean up.
             let _ = self.call(Op::Close { session }).await;
             return Err(why);
+        }
+        if let Some(permissions) = asked {
+            self.note_permissions(&session, permissions).await;
         }
         Ok(session)
     }
@@ -173,7 +278,7 @@ impl Link {
         self.resume(session, None).await.map_err(NotResumed::Refused)?;
         // Asked apart from its follow, as the resume is: a watch that failed must not read as a message that was not
         // taken. Nothing is open to answer in a session just resumed.
-        self.ask(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map_err(NotResumed::NotSent)?;
+        self.ask(Op::Send { permissions: None, session: session.to_owned(), text: text.to_owned() }).await.map_err(NotResumed::NotSent)?;
         let follow = self.inner.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
         if let Err(e) = self.follow(session, follow.seq).await {
             eprintln!("couldn't follow session {session} after a message resumed it; the next connect follows it: {e}");
@@ -205,7 +310,7 @@ impl Link {
         };
         mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
         // Asked apart from its follow, so only a refusal puts the marks back.
-        if let Err(why) = self.ask(Op::Resume { session: session.to_owned(), carry_on: carry_on.map(str::to_owned) }).await {
+        if let Err(why) = self.ask(Op::Resume { permissions: None, session: session.to_owned(), carry_on: carry_on.map(str::to_owned) }).await {
             if let Err(e) = mark(carry_ons, cut, false).await {
                 eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
             }
@@ -265,7 +370,7 @@ impl Link {
             Vec::new()
         });
         marked.await.map_err(|e| e.to_string())?;
-        if let Err(why) = self.ask(Op::TakeBack { session: session.to_owned() }).await {
+        if let Err(why) = self.ask(Op::TakeBack { permissions: None, session: session.to_owned() }).await {
             let _ = self.inner.core.apply_session(session, |_, follow| {
                 follow.taken_back = false;
                 Vec::new()
@@ -318,7 +423,7 @@ impl Link {
             None => self.open_question(session).await,
         };
         let Some(question) = question else {
-            return match self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await {
+            return match self.call(Op::Send { permissions: None, session: session.to_owned(), text: text.to_owned() }).await {
                 Ok(_) => Ok(false),
                 Err(why) if not_running(&why) && self.lost_mid_turn(session).await => {
                     self.inner.agent_lost(session).await?;
@@ -328,7 +433,7 @@ impl Link {
                 Err(why) => Err(why),
             };
         };
-        self.call(Op::AnswerQuestion { session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
+        self.call(Op::AnswerQuestion { permissions: None, session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
         let noted = self.inner.core.apply_session(session, |run, follow| {
             super::consumer::answered(run, follow, &question);
             Vec::new()
@@ -796,6 +901,10 @@ impl Inner {
         self.applied.send_modify(|n| *n += 1);
     }
 }
+
+/// What a run's timeline says when its agent's permissions change after its start.
+pub const NOW_AUTO: &str = "Permissions are now Auto, as Agent settings say";
+pub const NOW_ASK: &str = "Permissions are now Ask for each step, as Agent settings say";
 
 /// Why the harness keeps the session of listed `row` from any resume, as its row says.
 fn kept_by(row: &Value) -> Option<String> {

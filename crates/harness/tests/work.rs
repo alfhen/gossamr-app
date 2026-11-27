@@ -159,7 +159,7 @@ async fn connect(served: &Served) -> Client {
 
 fn open_op(provider: &str, cwd: Option<&str>, repo: Option<&str>, base: Option<&str>, branch: Option<&str>) -> Op {
     let owned = |value: Option<&str>| value.map(str::to_owned);
-    Op::Open { provider: provider.into(), cwd: cwd.map(PathBuf::from), repo: owned(repo), base: owned(base), branch: owned(branch), locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None }
+    Op::Open { provider: provider.into(), cwd: cwd.map(PathBuf::from), repo: owned(repo), base: owned(base), branch: owned(branch), locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None }
 }
 
 async fn open(client: &mut Client, op: Op) -> harness::error::Result<String> {
@@ -323,9 +323,9 @@ async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_sh
         let mut client = connect(&served).await;
         let session = id.clone();
         let called = match op {
-            "resume" => client.call(Op::Resume { session, carry_on: None }).await,
-            "take_back" => client.call(Op::TakeBack { session }).await,
-            _ => client.call(Op::AnswerQuestion { session, question: "q1".into(), text: "blue".into() }).await,
+            "resume" => client.call(Op::Resume { permissions: None, session, carry_on: None }).await,
+            "take_back" => client.call(Op::TakeBack { permissions: None, session }).await,
+            _ => client.call(Op::AnswerQuestion { permissions: None, session, question: "q1".into(), text: "blue".into() }).await,
         };
         assert!(called.is_ok(), "{op}: {:?}", called.err().map(|e| e.to_string()));
         assert_eq!(served.seer.starts().len(), 1, "{op}: started once the shell was read");
@@ -723,7 +723,7 @@ async fn a_handed_over_session_whose_worktree_you_removed_can_be_cleaned_up_sinc
     client.call(Op::HandOver { session: session.clone() }).await.unwrap();
     // As the person does in Terminal when Clean up says Terminal has it.
     std::fs::remove_dir_all(rig.worktree("harness-1")).unwrap();
-    let taken = client.call(Op::TakeBack { session: session.clone() }).await;
+    let taken = client.call(Op::TakeBack { permissions: None, session: session.clone() }).await;
     assert!(matches!(&taken, Err(Error::Said(why)) if why.contains("worktree is gone")), "{taken:?}");
     clean_up(&mut client, &session).await.expect("nothing could resume it, so its clean-up is not refused for the hand-over");
     assert!(rig.git(&rig.clone(), &["branch", "--list", "harness-1"]).is_empty(), "the branch goes too");
@@ -743,7 +743,7 @@ async fn a_closed_session_a_take_back_would_refuse_is_not_handed_over_and_its_cl
     close(&mut client, &session).await;
     let handed = client.call(Op::HandOver { session: session.clone() }).await;
     assert!(matches!(&handed, Err(Error::Said(why)) if why.contains("is not handed over")), "{handed:?}");
-    let taken = client.call(Op::TakeBack { session: session.clone() }).await;
+    let taken = client.call(Op::TakeBack { permissions: None, session: session.clone() }).await;
     assert!(taken.is_err(), "and there is nothing to take back");
     clean_up(&mut client, &session).await.expect("not blocked by a hand-over");
     assert!(!rig.worktree("harness-1").exists());

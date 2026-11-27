@@ -323,10 +323,29 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Withheld { .. } => {}
     }
     waits(run, follow);
+    if let Some(text) = announce_permissions(run) {
+        rows.add("update", text, None);
+    }
     if run.state != before || !rows.rows.is_empty() {
         run.last_progress_at = now;
     }
     rows.rows
+}
+
+/// What a run's timeline says when its agent runs in another mode than the one it last said while it worked or waited
+/// on you: a change of Settings, an answer or a take back. A run that is done says it when it next works. A run's first
+/// mode is its start's, and needs no line.
+pub fn announce_permissions(run: &mut Run) -> Option<&'static str> {
+    let now = run.agent_permissions?;
+    let busy = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked | RunState::Unknown);
+    if !busy || run.announced_permissions == Some(now) {
+        return None;
+    }
+    let first = run.announced_permissions.replace(now).is_none();
+    (!first).then_some(match now {
+        crate::model_choice::AgentPermissions::Auto => super::link::NOW_AUTO,
+        crate::model_choice::AgentPermissions::Ask => super::link::NOW_ASK,
+    })
 }
 
 /// Notes that the harness took the person's answer to the open permission request `request`: it waits on no one now,
