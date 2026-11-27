@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod real;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

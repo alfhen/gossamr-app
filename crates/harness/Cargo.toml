@@ -38,6 +38,11 @@ name = "wire-replay"
 path = "test-support/wire-replay/main.rs"
 required-features = ["testing"]
 
+[[bin]]
+name = "fake-codex-app-server"
+path = "test-support/fake-codex-app-server/main.rs"
+required-features = ["testing"]
+
 [dev-dependencies]
 # Its own fakes (`testing`) for the integration tests.
 harness = { path = ".", features = ["testing"] }

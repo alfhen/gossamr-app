@@ -18,8 +18,14 @@
 //! compared: the replay answers each one it is sent with success and skips the recording's own, with their answers.
 //! Where the recording gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its
 //! URL. The recorded endpoint's server name becomes the driver's when the driver names one server: the recording's one
-//! server, or of several the one whose tools the recorded `--allowedTools` names. Codex's and Gemini's wires add their
-//! rules with H7a and H8.
+//! server, or of several the one whose tools the recorded `--allowedTools` names. Gemini's wire adds its rules with H8.
+//!
+//! What is compared, for `codex app-server`'s JSON-RPC: each line's method, a request's id by the mapping (answers the
+//! replay plays carry the driver's id), a prompt's text, and the thread and turn ids of a prompt and an interrupt.
+//! Where the recording's `thread/start` or `thread/resume` names servers in its config, the driver's must too, each
+//! with a URL; the recorded endpoint is the server approved without asking, and its name becomes the driver's. A
+//! `thread/resume` binds the recorded thread id to the driver's. `initialize`'s client info and the rest of a thread's
+//! config are not compared. A prompt (`turn/start`) follows the `turn/completed` before it.
 //!
 //! When a line may come: a prompt follows the `result` before it, and an interrupt the last agent line before it that is
 //! not a `stream_event`. Before the replay writes such a line it waits until stdin has been quiet for
@@ -71,6 +77,13 @@ enum End {
 }
 
 fn main() -> ExitCode {
+    // The Codex driver's shape check, before it starts app-server: every name it relies on is there.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [sub, generate, flag, folder] = &args[..]
+        && (sub.as_str(), generate.as_str(), flag.as_str()) == ("app-server", "generate-json-schema", "--out")
+    {
+        return schema(Path::new(folder));
+    }
     let (Some(fixture), Some(out)) = (std::env::var_os("WIRE_REPLAY_FIXTURE"), std::env::var_os("WIRE_REPLAY_OUT")) else {
         eprintln!("wire-replay: WIRE_REPLAY_FIXTURE and WIRE_REPLAY_OUT must be set");
         return ExitCode::from(2);
@@ -132,6 +145,18 @@ fn main() -> ExitCode {
             }
         }
         Err(mismatch) => refuse(&out, &mismatch),
+    }
+}
+
+/// The schema files the Codex driver reads, listing every name it needs.
+fn schema(folder: &Path) -> ExitCode {
+    let files = harness::codex::driver::NEEDED.iter().map(|(file, names)| {
+        let entries: Vec<Value> = names.iter().map(|name| json!({"properties": {"method": {"enum": [name]}}})).collect();
+        std::fs::write(folder.join(file), json!({"oneOf": entries}).to_string())
+    });
+    match files.collect::<std::io::Result<Vec<()>>>() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::from(1),
     }
 }
 
@@ -220,6 +245,11 @@ fn kept(text: &str, secrets: &[String]) -> String {
             headers.values_mut().for_each(|value| *value = Value::from(redact::MASK));
         }
     }
+    if let Some(servers) = line.pointer_mut("/params/config/mcp_servers").and_then(Value::as_object_mut) {
+        for headers in servers.values_mut().filter_map(|server| server.get_mut("http_headers")).filter_map(Value::as_object_mut) {
+            headers.values_mut().for_each(|value| *value = Value::from(redact::MASK));
+        }
+    }
     redact::each_string(&mut line, &mut |text| *text = redact::text(text, secrets));
     line.to_string()
 }
@@ -267,12 +297,14 @@ struct Replay {
     /// The driver gave the tools endpoint, by a well-formed `mcp_set_servers`.
     endpoint: bool,
     prompted: bool,
+    /// The recording speaks `codex app-server`'s JSON-RPC.
+    rpc: bool,
 }
 
 impl Replay {
     fn new(lines: Vec<Recorded>) -> Replay {
         let (ids, asked) = (Ids::default(), HashMap::new());
-        Replay { lines, deadline: DEADLINE, quiet: QUIET, heard: Heard::default(), progress: None, played: vec![], ids, skipped: HashSet::new(), asked, endpoint: false, prompted: false }
+        Replay { lines, deadline: DEADLINE, quiet: QUIET, heard: Heard::default(), progress: None, played: vec![], ids, skipped: HashSet::new(), asked, endpoint: false, prompted: false, rpc: false }
     }
 
     /// Waits until stdin has been quiet for `quiet`, so a driver that reacts to a line already written has sent what it
@@ -292,12 +324,18 @@ impl Replay {
     fn play(mut self, input: &Receiver<Result<Arrived, String>>, written: &AtomicUsize, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<End, String> {
         let (mut closed, mut stays) = (false, false);
         let lines = std::mem::take(&mut self.lines);
+        self.rpc = lines.iter().find(|line| line.dir == "to_agent").is_some_and(|line| line.data.get("method").is_some() && line.data.get("type").is_none());
+        if self.rpc {
+            self.ids.recorded_servers = approved_servers(&lines);
+        }
         // Where the recording gives the endpoint before its first prompt, the driver must too.
-        let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && line.data["type"] == "user").unwrap_or(lines.len());
+        let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && is_prompt(&line.data)).unwrap_or(lines.len());
         let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
         self.skipped = lines.iter().filter(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| request_id(&line.data)).collect();
         self.ids.recorded_allowed = recorded_allowed(&lines);
-        self.ids.recorded_servers = configured_servers(&lines);
+        if !self.rpc {
+            self.ids.recorded_servers = configured_servers(&lines);
+        }
         let follows = follows(&lines, &self.skipped);
         let waited_for: HashSet<u64> = follows.values().copied().collect();
         for line in &lines {
@@ -310,7 +348,15 @@ impl Replay {
                         self.hush();
                     }
                     let mut data = line.data.clone();
+                    // Taken before the mapping, which gives a string id a fresh one of its own.
+                    let recorded_id = data.get("id").map(Value::to_string);
                     self.ids.agent(&mut data);
+                    if self.rpc && data.get("method").is_none() {
+                        // An answer to the driver's request carries the driver's id.
+                        if let Some(sent) = recorded_id.and_then(|id| self.ids.rpc.get(&id)).cloned() {
+                            data["id"] = sent;
+                        }
+                    }
                     if data["request"]["subtype"] == "can_use_tool"
                         && let Some(id) = data["request_id"].as_str()
                     {
@@ -339,7 +385,7 @@ impl Replay {
                     let Some((sent, stamp)) = self.next(input, stdout, &place, Some(&never))? else {
                         return Err(format!("line {}: stdin closed where the recording has {}", line.seq, what(&line.data)));
                     };
-                    if line.data["type"] == "user" && !std::mem::replace(&mut self.prompted, true)
+                    if is_prompt(&line.data) && !std::mem::replace(&mut self.prompted, true)
                         && let Some(at) = endpoint_at.filter(|_| !self.endpoint)
                     {
                         return Err(format!("line {}: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line {at}", line.seq));
@@ -420,6 +466,9 @@ impl Replay {
     }
 
     fn compare(&mut self, recorded: &Recorded, sent: &Value) -> Result<(), String> {
+        if self.rpc {
+            return self.compare_rpc(recorded, sent);
+        }
         let (want, at) = (&recorded.data, recorded.seq);
         let differs = |field: &str| Err(format!("line {at}: {field} differs from the recording's {}", what(want)));
         if want["type"] != sent["type"] {
@@ -491,10 +540,77 @@ impl Replay {
     }
 }
 
+impl Replay {
+    fn compare_rpc(&mut self, recorded: &Recorded, sent: &Value) -> Result<(), String> {
+        let (want, at) = (&recorded.data, recorded.seq);
+        let differs = |field: &str| Err(format!("line {at}: {field} differs from the recording's {}", what(want)));
+        let Some(method) = want["method"].as_str() else {
+            // The answer to a request of the agent's: its id as the replay sent it, and the same decision.
+            let keys = |value: &Value| value["result"].as_object().map(|fields| fields.keys().cloned().collect::<BTreeSet<_>>());
+            return match (sent.get("method"), sent["id"] == want["id"]) {
+                (Some(_), _) => Err(format!("line {at}: the driver sent {} where the recording has {}", what(sent), what(want))),
+                (None, false) => differs("the answer's id"),
+                _ if keys(want) != keys(sent) => differs("the answer's fields"),
+                _ if want["result"]["decision"] != sent["result"]["decision"] || want["result"]["action"] != sent["result"]["action"] => differs("the decision"),
+                _ => Ok(()),
+            };
+        };
+        if sent["method"] != method {
+            return Err(format!("line {at}: the driver sent {} where the recording has {}", what(sent), what(want)));
+        }
+        if let Some(id) = want.get("id") {
+            let fresh = sent.get("id").is_some_and(|id| !id.is_null() && self.ids.chosen.insert(id.to_string()));
+            if !fresh {
+                return Err(format!("line {at}: the driver's request has no id, or one it used before"));
+            }
+            self.ids.rpc.insert(id.to_string(), sent["id"].clone());
+        }
+        let (want, sent) = (&want["params"], &sent["params"]);
+        match method {
+            "thread/start" | "thread/resume" => {
+                let recorded_servers = want["config"]["mcp_servers"].as_object().is_some_and(|servers| !servers.is_empty());
+                let servers = sent["config"]["mcp_servers"].as_object().filter(|servers| !servers.is_empty());
+                if recorded_servers {
+                    let reachable = |server: &Value| server["url"].as_str().is_some_and(|url| !url.is_empty());
+                    if !servers.is_some_and(|servers| servers.values().all(reachable)) {
+                        return Err(format!("line {at}: the driver's {method} gives no tools endpoint with a url, which the recording gives"));
+                    }
+                    self.endpoint = true;
+                }
+                self.ids.sent_servers = servers.map(|servers| servers.keys().cloned().collect()).unwrap_or_default();
+                if let (Some(recorded), Some(live)) = (want["threadId"].as_str(), sent["threadId"].as_str()) {
+                    self.ids.to.entry(recorded.to_owned()).or_insert_with(|| live.to_owned());
+                }
+                if method == "thread/resume" && !self.ids.maps(&want["threadId"], &sent["threadId"]) {
+                    return differs("the thread id");
+                }
+                Ok(())
+            }
+            "turn/start" if texts(&want["input"]) != texts(&sent["input"]) => differs("the prompt's text"),
+            "turn/start" if !self.ids.maps(&want["threadId"], &sent["threadId"]) => differs("the thread id"),
+            "turn/interrupt" if !self.ids.maps(&want["threadId"], &sent["threadId"]) || !self.ids.maps(&want["turnId"], &sent["turnId"]) => differs("the interrupted turn"),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// A prompt, on either wire.
+fn is_prompt(data: &Value) -> bool {
+    data["type"] == "user" || data["method"] == "turn/start"
+}
+
+/// The servers a recorded app-server thread approved without asking: the endpoint among them.
+fn approved_servers(lines: &[Recorded]) -> Vec<String> {
+    let thread = lines.iter().find(|line| line.dir == "to_agent" && matches!(line.data["method"].as_str(), Some("thread/start" | "thread/resume")));
+    let servers = thread.and_then(|line| line.data["params"]["config"]["mcp_servers"].as_object());
+    servers.into_iter().flatten().filter(|(_, server)| server["default_tools_approval_mode"] == "approve").map(|(name, _)| name.clone()).collect()
+}
+
 /// The line types and control subtypes a report may name. Anything else is named by a fixed label, so a report
 /// never holds text a driver put in those fields.
 const TYPES: &[&str] = &["user", "control_request", "control_response", "control_cancel_request", "assistant", "system", "result", "stream_event"];
 const SUBTYPES: &[&str] = &["initialize", "interrupt", "can_use_tool", "mcp_set_servers", "set_model", "set_permission_mode"];
+const METHODS: &[&str] = &["initialize", "initialized", "thread/start", "thread/resume", "turn/start", "turn/interrupt", "turn/completed", "item/started", "item/completed"];
 
 /// A line's kind, for a report: its type and a control line's subtype. Never its payload.
 fn what(data: &Value) -> String {
@@ -502,6 +618,12 @@ fn what(data: &Value) -> String {
         Some(word) => list.iter().find(|known| **known == word).copied().unwrap_or(other),
         None => other,
     };
+    if data.get("type").is_none() && (data.get("method").is_some() || data.get("id").is_some()) {
+        return match data.get("method") {
+            Some(method) => known(method, METHODS, "a request of an unknown method").to_owned(),
+            None => "an answer".to_owned(),
+        };
+    }
     let kind = known(&data["type"], TYPES, "a line of an unknown type");
     match data["request"].get("subtype") {
         Some(subtype) => format!("{kind} {}", known(subtype, SUBTYPES, "of an unknown subtype")),
@@ -538,16 +660,16 @@ fn follows(lines: &[Recorded], skipped: &HashSet<String>) -> HashMap<u64, u64> {
     let (mut follows, mut result, mut last) = (HashMap::new(), None, None);
     for line in lines {
         if plays(line, skipped) {
-            if line.data["type"] == "result" {
+            if line.data["type"] == "result" || line.data["method"] == "turn/completed" {
                 result = Some(line.seq);
             }
             if line.data["type"] != "stream_event" {
                 last = Some(line.seq);
             }
         } else if line.dir == "to_agent" {
-            let after = match (line.data["type"].as_str(), line.data["request"]["subtype"].as_str()) {
-                (Some("user"), _) => result,
-                (Some("control_request"), Some("interrupt")) => last,
+            let after = match (line.data["type"].as_str(), line.data["request"]["subtype"].as_str(), line.data["method"].as_str()) {
+                (Some("user"), ..) | (_, _, Some("turn/start")) => result,
+                (Some("control_request"), Some("interrupt"), _) | (_, _, Some("turn/interrupt")) => last,
                 _ => None,
             };
             follows.extend(after.map(|after| (line.seq, after)));
@@ -604,6 +726,8 @@ struct Ids {
     /// What the recorded run allowed by `--allowedTools`, which names the endpoint among several servers.
     recorded_allowed: Vec<String>,
     sent_servers: Vec<String>,
+    /// A recorded JSON-RPC request id, as JSON, and the driver's.
+    rpc: HashMap<String, Value>,
 }
 
 fn is_id_field(key: &str) -> bool {
@@ -852,6 +976,25 @@ mod tests {
         assert_eq!(unique.len(), live.len(), "every recorded id has a live id of its own");
         assert!(ids.to.iter().all(|(recorded, live)| recorded != live), "and none is its recorded one");
         assert!(ids.bind(&json!("spike-1"), &json!(ids.to["1"].clone())).is_err(), "a driver id that is already live is refused");
+    }
+
+    #[test]
+    fn an_app_server_answer_carries_the_drivers_own_id_a_number_or_a_string() {
+        for (recorded, live) in [(json!(1), json!(7)), (json!("req-a"), json!("mine-1"))] {
+            let line = |seq: u64, dir: &str, data: Value| Recorded { seq, dir: dir.into(), data };
+            let recording = vec![
+                line(1, "to_agent", json!({"id": recorded, "method": "initialize", "params": {}})),
+                line(2, "from_agent", json!({"id": recorded, "result": {"userAgent": "x/0.171.0 (y)"}})),
+            ];
+            let (lines, input) = std::sync::mpsc::channel();
+            let sent = json!({"id": live, "method": "initialize", "params": {"clientInfo": {"name": "any"}}}).to_string();
+            lines.send(Ok(Arrived { text: sent, stamp: 0, at: Instant::now() })).unwrap();
+            drop(lines);
+            let mut out = vec![];
+            Replay::new(recording).play(&input, &AtomicUsize::new(0), &mut out, &mut vec![]).unwrap();
+            let played: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
+            assert_eq!(played["id"], live, "the recorded answer to {recorded} goes back as the answer to the driver's {live}");
+        }
     }
 
     #[test]
