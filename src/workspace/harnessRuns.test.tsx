@@ -256,9 +256,12 @@ describe("a run's permissions", () => {
 
   it("follows a change of Settings in the mock for every run whose agent may run, and leaves the others", async () => {
     const backend = harness();
+    // A run the backend reads again as stuck, which may work again: it takes the change too.
+    (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(byKey(backend, "CA-407").id, { state: "systemBlocked" });
     const before = backend.runs.list().filter((r) => r.harnessSession);
+    expect(before.some((r) => r.state === "systemBlocked")).toBe(true);
     await backend.runsSetSettings({ ...(await backend.runsSettings()), permissions: "ask" });
-    const live = (state: string) => ["working", "needsAnswer", "needsPermission"].includes(state);
+    const live = (state: string) => ["working", "needsAnswer", "needsPermission", "systemBlocked", "unknown"].includes(state);
     expect(before.some((r) => live(r.state)) && before.some((r) => !live(r.state))).toBe(true);
     for (const run of before) expect(backend.runs.list().find((r) => r.id === run.id)!.agentPermissions).toBe(live(run.state) ? "ask" : "auto");
   });

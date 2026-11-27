@@ -158,9 +158,10 @@ impl Link {
             sent = now;
             kept = self.ask_once(Op::SetPermissions { session: session.clone(), permissions: now }).await.is_ok();
         }
-        // A refused op may or may not have kept the choice: the harness's row says which.
+        // A refused op may or may not have kept the choice: the harness's row says which. A choice made since this
+        // call was sent is noted by its own call, so this one never writes an older value over it.
         let noted = match kept {
-            true => Some(sent),
+            true => Some(sent).filter(|sent| *sent == self.permissions()),
             false => self.kept_permissions(&session).await,
         };
         if let Some(permissions) = noted {
@@ -220,7 +221,7 @@ impl Link {
         let noted = self.inner.core.apply_session(session, move |run, _| {
             let before = run.agent_permissions.replace(permissions);
             // Said only of a run whose agent works or waits on you: one that is done takes it with its next message.
-            let busy = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission);
+            let busy = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission | RunState::SystemBlocked | RunState::Unknown);
             if !busy || before.is_none_or(|before| before == permissions) {
                 return Vec::new();
             }

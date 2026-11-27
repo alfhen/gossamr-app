@@ -1501,7 +1501,7 @@ export class MockRuns {
     };
     // As the backend sends a change to every session whose agent may run, mid-turn too.
     const permissions = this.limits.permissions;
-    const live = this.runs.filter((r) => r.harnessSession && r.agentPermissions && r.agentPermissions !== permissions && ["working", "needsAnswer", "needsPermission"].includes(r.state));
+    const live = this.runs.filter((r) => r.harnessSession && r.agentPermissions && r.agentPermissions !== permissions && ["working", "needsAnswer", "needsPermission", "systemBlocked", "unknown"].includes(r.state));
     for (const run of live) this.update(run.id, { agentPermissions: permissions });
     if (live.length) this.changed();
     return this.limits;
