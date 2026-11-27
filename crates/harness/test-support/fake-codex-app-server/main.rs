@@ -22,7 +22,8 @@
 //! `escaped.pid`, `item/started` follows. The sleep is then in no tree or group app-server leads to. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
 //! 900, and completes the turn once it is answered.
 //!
-//! `sleep <seconds> [<pid file>]` only sleeps, with no `FAKE_APP_SERVER_OUT` needed, once it has written its pid to the
+//! `sleep <seconds> [<pid file> [<child's pid file>]]` only sleeps, with no `FAKE_APP_SERVER_OUT` needed, once it has
+//! written its pid to the file. With a second file it first starts a child of its own that does the same with that
 //! file. Unlike Apple's `/bin/sleep`, whose environment macOS hides from other processes, it shows the harness the
 //! environment it started with.
 
@@ -39,8 +40,16 @@ const SERVER: &[&str] = &["item/commandExecution/requestApproval", "item/fileCha
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if let ["sleep", seconds, ref pid_file @ ..] = argv.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        if let [pid_file] = pid_file {
+    if let ["sleep", seconds, ref files @ ..] = argv.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        if let [_, child] = files {
+            let me = std::env::current_exe().unwrap_or_default();
+            let _ = std::process::Command::new(me).args(["sleep", seconds, child]).spawn();
+            let given = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !Path::new(child).exists() && std::time::Instant::now() < given {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        if let [pid_file, ..] = files {
             let written = Path::new(pid_file).with_extension("part");
             let _ = std::fs::write(&written, std::process::id().to_string()).and_then(|()| std::fs::rename(&written, pid_file));
         }

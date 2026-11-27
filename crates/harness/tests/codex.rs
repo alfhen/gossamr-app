@@ -417,11 +417,24 @@ async fn codex_an_exited_app_servers_command_is_stopped_from_its_record_and_a_re
 /// A `sleep 60` that a shell in `folder` sent to the background before it exited, in the shell's group: the system's
 /// now, as the person's own job or an agent's command left it.
 fn left_by_a_shell(folder: &Path, session: Option<&str>) -> (u32, Process) {
+    let (group, left, _) = shell_leaves(folder, session, false);
+    (group, left)
+}
+
+/// The same, with a child of its own that it started first: what pid 1 took in is then a parent.
+fn left_with_a_child_by_a_shell(folder: &Path, session: Option<&str>) -> (Process, Process) {
+    let (_, left, child) = shell_leaves(folder, session, true);
+    (left, child.expect("the child runs"))
+}
+
+fn shell_leaves(folder: &Path, session: Option<&str>, with_child: bool) -> (u32, Process, Option<Process>) {
     use std::io::BufRead;
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let pid_file = folder.join(format!(".left-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let file = |what: &str| folder.join(format!(".{what}-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let (pid_file, child_file) = (file("left"), file("child"));
+    let child_arg = if with_child { format!(" '{}'", child_file.display()) } else { String::new() };
     // Not `/bin/sleep`: macOS hides the environment of its own programs, so the harness could not tell whose it is.
-    let script = format!("cd '{}'; '{FAKE}' sleep 60 '{}' & echo $!", folder.display(), pid_file.display());
+    let script = format!("cd '{}'; '{FAKE}' sleep 60 '{}'{child_arg} & echo $!", folder.display(), pid_file.display());
     let mut shell = std::process::Command::new("/bin/sh");
     shell.args(["-c", &script]).env_remove(process::SESSION_VARIABLE);
     if let Some(session) = session {
@@ -438,7 +451,9 @@ fn left_by_a_shell(folder: &Path, session: Option<&str>) -> (u32, Process) {
         assert!(std::time::Instant::now() < given, "the sleep runs as itself");
         std::thread::sleep(Duration::from_millis(10));
     }
-    (group, Process { pid, started: process::started_of(pid).expect("the sleep runs") })
+    let running = |pid: u32| Process { pid, started: process::started_of(pid).expect("the sleep runs") };
+    let child = with_child.then(|| running(std::fs::read_to_string(&child_file).unwrap().trim().parse().unwrap()));
+    (group, running(pid), child)
 }
 
 /// A process that has exited, by the pid and start time it had.
@@ -544,6 +559,34 @@ async fn codex_at_a_sessions_end_what_the_system_took_in_from_you_in_its_worktre
         assert!(process::alive(left), "and runs on");
         end(left);
     }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_at_a_sessions_end_what_its_agent_left_in_its_worktree_goes_with_what_that_started_and_yours_runs_on() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // As `npm run dev &`: the system takes in npm, and the server npm started is npm's child, not the system's.
+    let (orphan, child) = left_with_a_child_by_a_shell(&worktree, Some(&id));
+    let (_, yours) = left_by_a_shell(&worktree, None);
+    // The app-server is among them too while it runs; the session's end looks once it has gone.
+    let found = process::marked_in(&worktree, 0, &id);
+    let at = |left: &Process| found.iter().position(|found| found == left);
+    assert!(at(&child).is_some_and(|child| at(&orphan).is_some_and(|orphan| child < orphan)), "the child before its parent: {found:?}");
+    assert_eq!(at(&yours), None, "and not yours");
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&orphan, "what the agent's command left").await;
+    gone(&child, "what that started").await;
+    assert_eq!(process::seam::sent_to(yours.pid), Vec::<i32>::new(), "yours was never signalled");
+    assert!(process::alive(&yours), "and runs on");
+    end(&yours);
     harness.shutdown().await;
 }
 
