@@ -245,3 +245,43 @@ describe("an answer that waits for a stopped session to resume", () => {
     expect(answerSentText({ ...run, state: "working" })).toBe("Answer sent. The agent gets it when its current turn ends.");
   });
 });
+
+describe("a run's permissions", () => {
+  it("shows the mode Gossamr last asked its agent for, and nothing for a run that never had a session", () => {
+    const run = byKey(harness(), "CA-407");
+    expect(sheet({ ...run, agentPermissions: "auto" })).toMatch(/data-agent-permissions[^>]*>Permissions <b[^>]*>Auto<\/b>/);
+    expect(sheet({ ...run, agentPermissions: "ask" })).toMatch(/data-agent-permissions[^>]*>Permissions <b[^>]*>Ask for each step<\/b>/);
+    expect(sheet({ ...run, agentPermissions: undefined })).not.toContain("data-agent-permissions");
+  });
+
+  it("follows a change of Settings in the mock for every run whose agent may run, and leaves the others", async () => {
+    const backend = harness();
+    // A run the backend reads again as stuck, which may work again: it takes the change too.
+    (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(byKey(backend, "CA-407").id, { state: "systemBlocked" });
+    const before = backend.runs.list().filter((r) => r.harnessSession);
+    expect(before.some((r) => r.state === "systemBlocked")).toBe(true);
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), permissions: "ask" });
+    const live = (state: string) => ["working", "needsAnswer", "needsPermission", "systemBlocked", "unknown"].includes(state);
+    expect(before.some((r) => live(r.state)) && before.some((r) => !live(r.state))).toBe(true);
+    for (const run of before) expect(backend.runs.list().find((r) => r.id === run.id)!.agentPermissions).toBe(live(run.state) ? "ask" : "auto");
+  });
+
+  it("takes the setting of the moment with a message to a working run in the mock, as the backend sends it", () => {
+    const backend = harness();
+    // A run on the harness in the middle of its turn, as the seed has none.
+    const working = (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(byKey(backend, "CA-407").id, { state: "working", needs: null });
+    expect(working.agentPermissions).toBe("auto");
+    // As a run whose mode was set before a change of Settings the backend could not send.
+    (backend.runs as unknown as { limits: { permissions: string } }).limits.permissions = "ask";
+    expect(backend.runs.messageAgent(working.id, "Use the blue one.")).toBe("queued");
+    expect(backend.runs.list().find((r) => r.id === working.id)!.agentPermissions).toBe("ask");
+  });
+
+  it("takes the setting of the moment with an answer in the mock, as the backend sends it with each message", async () => {
+    const backend = harness();
+    const run = byKey(backend, "CA-407");
+    expect(run.agentPermissions).toBe("auto");
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), permissions: "ask" });
+    expect(backend.runs.answer(run.id, "Yes, keep 10% back.").agentPermissions).toBe("ask");
+  });
+});

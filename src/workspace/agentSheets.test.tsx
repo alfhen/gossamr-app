@@ -419,6 +419,16 @@ describe("agent settings", () => {
     expect(html).not.toContain("tokens");
   });
 
+  it("shows Claude agents' permissions as Auto when the backend sent none, and Ask for each step when chosen", () => {
+    const view = (settings: typeof SETTINGS) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const unsent = view({ ...SETTINGS, permissions: undefined });
+    expect(unsent).toMatch(/<option value="auto" selected/);
+    expect(unsent).toContain("Claude decides which steps are safe and runs them without asking you. That can include force-pushing, resetting, running scripts from the internet and sending files to other sites.");
+    const asks = view({ ...SETTINGS, permissions: "ask" });
+    expect(asks).toMatch(/<option value="ask" selected/);
+    expect(asks).toContain("You allow or deny each step that needs it.");
+  });
+
   it("holds the fields while a save is under way so a second one can't send stale values", () => {
     const view = (settingsSaving: boolean) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     const fields = (html: string) => [...html.matchAll(/<(?:input|select)[^>]*aria-label="(?:Agents running|Terminal app)[^>]*>/g)].map((m) => /disabled/.test(m[0]));

@@ -20,6 +20,10 @@ impl RunService {
         let mut live = self.settings.lock().expect("settings lock poisoned");
         self.update_config(|config| config.agents = settings)?;
         *live = settings;
+        // Sent to agents already started at once; one the harness cannot reach takes it with its next message.
+        if let Some(on) = &self.harness {
+            on.link.choose_permissions(settings.permissions);
+        }
         Ok(settings)
     }
 }

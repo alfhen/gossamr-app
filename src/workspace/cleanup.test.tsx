@@ -164,7 +164,7 @@ describe("the mock settings", () => {
     const backend = new MockBackend();
     const older = { maxRuns: 2, terminal: "iTerm", draftOnFinish: false, reportResult: true, wallClockMinutes: 30, tokenCap: 100 } as const;
     await backend.runsSetSettings(older);
-    expect(await backend.runsSettings()).toEqual({ maxRuns: 2, terminal: "iTerm", notifications: "workstream" });
+    expect(await backend.runsSettings()).toEqual({ maxRuns: 2, terminal: "iTerm", notifications: "workstream", permissions: "auto" });
   });
 
   it("govern how many runs run at once: another waits for a slot", async () => {
@@ -180,7 +180,7 @@ describe("the mock settings", () => {
   it("clamps like the backend and returns what it kept", async () => {
     const backend = new MockBackend();
     const saved = await backend.runsSetSettings({ maxRuns: 40, terminal: "iTerm" });
-    expect(saved).toEqual({ maxRuns: 6, terminal: "iTerm", notifications: "workstream" });
+    expect(saved).toEqual({ maxRuns: 6, terminal: "iTerm", notifications: "workstream", permissions: "auto" });
     expect(await backend.runsSettings()).toEqual(saved);
   });
 });

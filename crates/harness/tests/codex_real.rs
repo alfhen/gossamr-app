@@ -52,7 +52,7 @@ async fn codex_real_the_drivers_thread_start_in_an_empty_signed_out_codex_home_l
     env.push(("CODEX_HOME".into(), login.clone().into()));
     let mut tools = harness::tools::ToolsEndpoint::unattached();
     tools.allowed = vec![tools.name.clone()];
-    let launch = Launch { cwd: work.clone(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
+    let launch = Launch { cwd: work.clone(), locked: false, model: None, login: None, effort: None, permissions: Default::default(), resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
     let mut link = harness::codex::driver::CodexDriver::new(binary).open(launch).unwrap();
     let started = tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(body) = link.output.recv().await {

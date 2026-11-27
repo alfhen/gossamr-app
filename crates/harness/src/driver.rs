@@ -87,6 +87,37 @@ pub fn random_hex(bytes: usize) -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Who settles a normal session's permission prompts first. Every prompt left over still comes to the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permissions {
+    /// Each prompt comes to the client: Claude's `--permission-mode default` (Manual), whatever default the login's own
+    /// settings name.
+    #[default]
+    Ask,
+    /// The provider's auto mode, where it has one: it runs what its checker takes as safe, blocks what it does not,
+    /// and asks the rest. Claude's is `--permission-mode auto`.
+    Auto,
+}
+
+impl Permissions {
+    /// As the store keeps it: none for `Ask`.
+    pub fn stored(self) -> Option<&'static str> {
+        match self {
+            Permissions::Ask => None,
+            Permissions::Auto => Some("auto"),
+        }
+    }
+
+    /// From the store: anything but `auto` is `Ask`.
+    pub fn from_stored(stored: Option<&str>) -> Permissions {
+        match stored {
+            Some("auto") => Permissions::Auto,
+            _ => Permissions::Ask,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Launch {
     pub cwd: PathBuf,
@@ -95,6 +126,8 @@ pub struct Launch {
     /// The login folder as the client typed it; None is the provider's usual setup. `env` already runs as it.
     pub login: Option<String>,
     pub effort: Option<String>,
+    /// Who settles the agent's permission prompts first. A locked session's profile decides its own, so it ignores this.
+    pub permissions: Permissions,
     /// The provider's own session id, to resume it.
     pub resume: Option<String>,
     /// The session's tools token, for the `Authorization: Bearer` header. Every start and every resume gets a new one,
@@ -116,6 +149,9 @@ pub enum Command {
     /// `id` is the driver's own id of the request. A deny can say why.
     Answer { id: String, decision: Decision, message: Option<String> },
     Cancel,
+    /// Who settles the agent's permission prompts from now on. A driver that cannot switch a running agent, and a locked
+    /// session, ignore it; the next start reads it from the session's row.
+    SetPermissions(Permissions),
     /// Ends the session. The driver closes `output` once the agent is gone.
     Stop,
     /// Sent when a stopped agent has not gone in time: kill its process tree.
