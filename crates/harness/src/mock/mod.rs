@@ -70,6 +70,9 @@ pub struct Script {
     pub recorded: Vec<(String, Recorded)>,
     /// The tools the script's client declares, from a `{"tools": [...]}` line.
     pub tools: Vec<ToolSpec>,
+    /// How long the agent takes to go after a Stop, from a `{"stops_after_ms": n}` line, as a slow agent does. A Kill
+    /// ends it at once.
+    pub stops_after_ms: u64,
 }
 
 /// The largest script or recording read. H0's largest recording is 200 KB.
@@ -117,6 +120,10 @@ impl Script {
         }
         let mut script = Script::default();
         for (n, line) in lines {
+            if let Some(ms) = line.get("stops_after_ms") {
+                script.stops_after_ms = ms.as_u64().ok_or_else(|| format!("{n}: stops_after_ms is a number of milliseconds"))?;
+                continue;
+            }
             match (line.get("capabilities"), line.get("tools")) {
                 (Some(caps), _) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
                 (None, Some(tools)) => script.tools = serde_json::from_value(tools.clone()).map_err(|e| bad(n, e))?,
@@ -513,6 +520,17 @@ impl Player {
                 return Got::Stopped;
             }
             match command {
+                Command::Stop if self.mock.inner.script.stops_after_ms > 0 => {
+                    let slow = tokio::time::sleep(std::time::Duration::from_millis(self.mock.inner.script.stops_after_ms));
+                    tokio::pin!(slow);
+                    // A Kill that comes meanwhile ends it at once.
+                    loop {
+                        tokio::select! {
+                            _ = &mut slow => return Got::Stopped,
+                            next = self.commands.recv() => if matches!(next, None | Some(Command::Kill)) { return Got::Stopped },
+                        }
+                    }
+                }
                 Command::Stop | Command::Kill => return Got::Stopped,
                 command if accept(&command) => return Got::Matched(command),
                 Command::Cancel if self.mock.inner.script.replay => return Got::Diverged("the replay was cancelled where the recording was not".into()),

@@ -1568,7 +1568,7 @@ export class MockRuns {
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
     const left = !!run.runsOn && !this.providers.has(run.runsOn.instanceId);
-    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
+    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", resumedHere: false, ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
     this.changed();
     return { type: "removed" };
   }

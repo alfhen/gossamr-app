@@ -166,6 +166,10 @@ struct OpenRequest {
 
 /// Why a take back waits: a process still holds the session, as Terminal's `claude --resume` does.
 pub const STILL_IN_TERMINAL: &str = "still runs this session in Terminal";
+/// Why a resume of a session Terminal never had waits: one of the providers' programs works in its folder.
+pub const WORKS_IN_WORKTREE: &str = "works in this run's worktree";
+/// Why it waits when a process names the session's id, as `tail -f <id>.jsonl` or `claude --resume <id>` does.
+pub const OPENS_SESSION: &str = "has this session open";
 /// Why the first prompt after a take back is dropped when the check could not be made.
 pub const CANNOT_CHECK_TERMINAL: &str = "Gossamr couldn't check whether Terminal still runs this session. Try again.";
 /// Each prompt such a drop left unsent, after its reason.
@@ -175,16 +179,43 @@ pub const NOT_SENT: &str = "Not sent:";
 /// back and its first prompt refuse with: its provider id in a process's arguments, or a provider's program in its
 /// folder but in no other session's folder inside it, nor in the old `.claude/worktrees` of a clone.
 fn held_in_terminal(store: &Store, id: &str, row: &crate::store::SessionRow, also: Option<&crate::process::Process>) -> Result<Option<String>> {
-    let Some(provider_session) = row.provider_session.as_deref() else { return Ok(None) };
-    let mut ours: Vec<crate::process::Process> = store.agents()?.into_iter().map(|(_, agent)| agent).collect();
-    ours.extend(also.cloned());
-    let mut skip: Vec<std::path::PathBuf> = store.session_folders()?.into_iter().filter(|(other, folder)| other != id && folder != &row.cwd && folder.starts_with(&row.cwd)).map(|(_, folder)| folder).collect();
-    skip.push(row.cwd.join(".claude").join("worktrees"));
-    let markers: Vec<&str> = crate::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
-    Ok(crate::process::holding(provider_session, &row.cwd, &markers, &ours, &skip).map(|pid| {
-        let label = crate::provider::Provider::named(&row.provider).map_or("Its agent", crate::provider::Provider::label);
-        format!("{label} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.")
-    }))
+    Ok(TerminalScan::of(store, id, row, also)?.and_then(|scan| scan.held()))
+}
+
+/// What a check for a holder reads from the store, so the scan of every process can run with no lock held.
+struct TerminalScan {
+    provider_session: String,
+    cwd: std::path::PathBuf,
+    provider: String,
+    ours: Vec<crate::process::Process>,
+    skip: Vec<std::path::PathBuf>,
+    handed_over: bool,
+}
+
+impl TerminalScan {
+    fn of(store: &Store, id: &str, row: &crate::store::SessionRow, also: Option<&crate::process::Process>) -> Result<Option<TerminalScan>> {
+        let Some(provider_session) = row.provider_session.clone() else { return Ok(None) };
+        let mut ours: Vec<crate::process::Process> = store.agents()?.into_iter().map(|(_, agent)| agent).collect();
+        ours.extend(also.cloned());
+        let mut skip: Vec<std::path::PathBuf> = store.session_folders()?.into_iter().filter(|(other, folder)| other != id && folder != &row.cwd && folder.starts_with(&row.cwd)).map(|(_, folder)| folder).collect();
+        skip.push(row.cwd.join(".claude").join("worktrees"));
+        let handed_over = row.handed_over || store.was_handed_over(id)?;
+        Ok(Some(TerminalScan { provider_session, cwd: row.cwd.clone(), provider: row.provider.clone(), ours, skip, handed_over }))
+    }
+
+    /// The words a take back, a resume or a first prompt refuse with, by whether Terminal ever had the session.
+    fn held(&self) -> Option<String> {
+        let markers: Vec<&str> = crate::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
+        let pid = crate::process::holding(&self.provider_session, &self.cwd, &markers, &self.ours, &self.skip)?;
+        let provider = crate::provider::Provider::named(&self.provider);
+        // Named as `ps` shows it, so you can find it: what holds a session Terminal never had may be anything.
+        let name = crate::process::program_name(pid).unwrap_or_else(|| "a process".to_owned());
+        Some(match (self.handed_over, crate::process::names_id(pid, &self.provider_session)) {
+            (true, _) => format!("{} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.", provider.map_or("Its agent", crate::provider::Provider::label)),
+            (false, true) => format!("`{name}` (pid {pid}) {OPENS_SESSION}. Quit it, then message the agent."),
+            (false, false) => format!("A `{name}` (pid {pid}) {WORKS_IN_WORKTREE}. Quit it, then message the agent."),
+        })
+    }
 }
 
 enum Request {
@@ -364,6 +395,9 @@ impl Harness {
         // Queued before the session's task starts, so a resume that answers has queued it.
         let first = carry_on.clone().map(Request::CarryOn);
         let carry_on = carry_on.is_some();
+        // Every process is read with no lock held; a store that can't say is a reason to look under the lock.
+        let scan = self.inner.with_store(|store| TerminalScan::of(store, id, &store.session(id)?, None));
+        let suspect = scan.map_or(true, |scan| scan.is_some_and(|scan| scan.held().is_some()));
         let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
             self.inner.leftovers_stopped(store, live)?;
             let row = store.session(id)?;
@@ -404,7 +438,8 @@ impl Harness {
             let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
             // Handed over now or ever before, it may still run in Terminal: two agents on one session would write one
             // transcript. Every resume asks, since a take back's start can end before its first prompt was checked.
-            if let Some(words) = held_in_terminal(store, id, &row, None)? {
+            // Scanned again under the lock only when the scan before it found something.
+            if suspect && let Some(words) = held_in_terminal(store, id, &row, None)? {
                 return Err(Error::Refused(words));
             }
             let driver = self.driver(&row.provider)?;

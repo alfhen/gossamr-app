@@ -663,30 +663,45 @@ async fn a_first_prompt_whose_check_for_terminal_cannot_be_made_is_dropped_unsen
 
 #[test]
 fn the_check_for_terminal_counts_what_an_agent_of_the_harnesss_own_started_as_its_own() {
-    let id = "1b2c3d4e-0000-4000-8000-0000000000ac";
+    // Its own id each time, so a child an earlier run left is no part of this one.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+    let id = format!("1b2c3d4e-0000-4000-8000-{:012x}", (u64::from(std::process::id()) << 32) | u64::from(nanos));
     // A launcher that runs its `claude --resume <id>` as a child rather than in its own place; the child forks nothing.
     let mut launcher = std::process::Command::new("/bin/sh");
     launcher.args(["-c", &format!("python3 -c 'import time; time.sleep(30)' --resume {id}; true")]);
     let launcher = Held::start(&mut launcher);
     // Once the child has become python, whose parent is the launcher.
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let ps = std::process::Command::new("ps").args(["-axo", "ppid=,comm="]).output().unwrap();
+    let child = loop {
+        let ps = std::process::Command::new("ps").args(["-axo", "pid=,ppid=,comm="]).output().unwrap();
         let listing = String::from_utf8_lossy(&ps.stdout).into_owned();
-        let up = listing.lines().any(|line| {
+        let found = listing.lines().find_map(|line| {
             let mut words = line.split_whitespace();
-            words.next().and_then(|ppid| ppid.parse::<u32>().ok()) == Some(launcher.pid()) && words.next().is_some_and(|comm| comm.to_ascii_lowercase().contains("python"))
+            let pid: u32 = words.next()?.parse().ok()?;
+            let ppid: u32 = words.next()?.parse().ok()?;
+            (ppid == launcher.pid() && words.next()?.to_ascii_lowercase().contains("python")).then_some(pid)
         });
-        if up {
-            break;
+        if let Some(pid) = found {
+            break Killed(pid);
         }
         assert!(std::time::Instant::now() < until, "the child never became python");
         std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    };
     std::thread::sleep(std::time::Duration::from_millis(150));
-    assert!(harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &[], &[]).is_some(), "anyone else's would hold it");
+    assert!(harness::process::holding(&id, std::path::Path::new("/nowhere"), &[], &[], &[]).is_some(), "anyone else's would hold it");
     let ours = [harness::process::Process { pid: launcher.pid(), started: harness::process::started_of(launcher.pid()).unwrap() }];
-    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &[], &ours, &[]), None, "the launcher's child is ours");
+    assert_eq!(harness::process::holding(&id, std::path::Path::new("/nowhere"), &[], &ours, &[]), None, "the launcher's child is ours");
+    drop(child);
+}
+
+/// Kills the process it names when it goes, failed assertion or not: a child a test's launcher started.
+struct Killed(u32);
+
+impl Drop for Killed {
+    fn drop(&mut self) {
+        // SAFETY: kill has no preconditions; the pid is the test's own launcher's child, still running.
+        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+    }
 }
 
 #[tokio::test]
@@ -766,4 +781,42 @@ async fn a_resume_waits_for_a_holder_too_even_after_a_take_back_whose_start_ende
     drop(late);
     let mut events = harness.resume_with(&id, None).await.expect("once it ended");
     until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+}
+
+#[tokio::test]
+async fn a_resume_of_a_session_terminal_never_had_names_the_program_in_its_worktree() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: folder.path().into(), tools: tools(), ..Default::default() }).await.unwrap();
+    next(&mut events).await;
+    closed(&harness, &id, &mut events).await;
+    // Your own `claude`, opened in the agent's worktree to look at its work.
+    let mut claude = std::process::Command::new("/bin/sleep");
+    std::os::unix::process::CommandExt::arg0(&mut claude, "claude").arg("30").current_dir(folder.path());
+    let claude = Held::start(&mut claude);
+    settled(claude.pid(), "no-such-id", folder.path(), &["claude"]);
+    match harness.resume_with(&id, None).await {
+        Err(Error::Refused(said)) => assert_eq!(said, format!("A `claude` (pid {}) {}. Quit it, then message the agent.", claude.pid(), harness::session::WORKS_IN_WORKTREE)),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+}
+
+#[tokio::test]
+async fn a_resume_of_a_session_terminal_never_had_names_a_process_that_names_its_id() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: folder.path().into(), tools: tools(), ..Default::default() }).await.unwrap();
+    let ps = provider_session(&next(&mut events).await.body);
+    closed(&harness, &id, &mut events).await;
+    // As `tail -f <id>.jsonl` would, from anywhere.
+    let watching = Held::start(&mut shell_with(&[&format!("/tmp/{ps}.jsonl")]));
+    settled(watching.pid(), &ps, std::path::Path::new("/nowhere"), &[]);
+    match harness.resume_with(&id, None).await {
+        Err(Error::Refused(said)) => assert_eq!(said, format!("`sh` (pid {}) {}. Quit it, then message the agent.", watching.pid(), harness::session::OPENS_SESSION)),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
 }

@@ -157,6 +157,13 @@ pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path
     write_attach_guarded(dir, login, program, worktree, words, None)
 }
 
+/// Where a Terminal's script moves its run's marker when it claims the session, just before it starts `claude`.
+pub fn claimed_of(marker: &Path) -> PathBuf {
+    let mut name = marker.file_name().unwrap_or_default().to_owned();
+    name.push(".claimed");
+    marker.with_file_name(name)
+}
+
 /// What a take back says in a Terminal that had not yet started the session's `claude`.
 pub const TAKEN_BACK_HERE: &str = "Gossamr took this session back, so it isn't opened here.";
 
@@ -167,8 +174,13 @@ pub fn write_attach_guarded(dir: &Path, login: Option<&ProviderEnv>, program: &P
     let (program, worktree, words_text) = (quotable(program)?, quotable(worktree)?, plain_words(words)?);
     let login = login_lines(login)?;
     let guard = match marker {
+        // Claimed by renaming it, which only one of this and a take back's removal can do: the one that loses knows.
         // In double quotes: the words hold an apostrophe, and no `$`, backquote or backslash.
-        Some(marker) => format!("[ -e '{}' ] || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}\n", quotable(marker)?),
+        Some(marker) => {
+            let claimed = claimed_of(marker);
+            let (marker, claimed) = (quotable(marker)?, quotable(&claimed)?);
+            format!("mv -f '{marker}' '{claimed}' 2>/dev/null || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}; touch '{claimed}'\n")
+        }
         None => String::new(),
     };
     // Right before `exec`, so nothing between the check and `claude` can pause.

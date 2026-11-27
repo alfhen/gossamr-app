@@ -108,7 +108,7 @@ pub fn convert(numbered: &[(usize, Value)]) -> Result<Script, String> {
     }
     let mut seen = HashSet::new();
     let recorded = c.recorded.into_iter().filter(|(value, _)| seen.insert(value.clone())).collect();
-    Ok(Script { capabilities: capabilities(c.wire), steps: c.steps, replay: true, recorded, tools: vec![] })
+    Ok(Script { capabilities: capabilities(c.wire), steps: c.steps, replay: true, recorded, tools: vec![], stops_after_ms: 0 })
 }
 
 #[derive(Default)]

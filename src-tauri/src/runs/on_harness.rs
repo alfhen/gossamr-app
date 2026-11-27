@@ -67,6 +67,12 @@ pub const HAND_OVER_WAITING: &str = "It is waiting on you; answer or stop it fir
 /// Why Take over refuses a run with no request Gossamr can only deny: the others are answered here.
 pub const TAKE_OVER_ONLY_DENY: &str = "Take over is for a request Gossamr can only deny. Answer this one here.";
 
+/// Why Resume here waits while Terminal's script has just claimed the session.
+pub const TERMINAL_STARTING: &str = "Claude is starting in Terminal. Quit it there once it opens, then Resume here.";
+
+/// Why Open in Terminal waits after it opened one for the run a moment ago.
+pub const TERMINAL_OPENING_AGAIN: &str = "Terminal is still opening it. Use that window once it opens.";
+
 /// Why Open in Terminal opened none: Resume here took the run back while it waited for its agent to go.
 pub const TAKEN_BACK_FIRST: &str = "It was taken back before Terminal opened, so Terminal didn't open.";
 
@@ -618,6 +624,12 @@ impl RunService {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Some(Err(e.into())),
         };
+        // Terminal's script claimed it first, a moment ago: its `claude` may be between `exec` and showing its
+        // arguments, where no scan sees it. An older claim is for the scans below, which see what it started.
+        let claimed = std::fs::metadata(super::control::claimed_of(&marker)).and_then(|meta| meta.modified());
+        if !had_marker && claimed.is_ok_and(|at| at.elapsed().is_ok_and(|since| since < self.terminal_grace.max(TERMINAL_STARTS_WITHIN))) {
+            return Some(Err(Error::Proposal(TERMINAL_STARTING.into())));
+        }
         // Put back when the harness refused for its own agent, which nothing resumed: Terminal may still open it. Not
         // for a holder, which is past the guard already, nor for an error on the way, after which the harness may
         // have taken it.
@@ -628,7 +640,7 @@ impl RunService {
         Some(match link.take_back(session).await {
             Ok(()) => self.load(&run.id).await,
             // Already in plain words, and the way on is yours.
-            Err(why) if why.contains(harness::session::STILL_IN_TERMINAL) => Err(Error::Proposal(plain_refusal(&why, session))),
+            Err(why) if why.contains(harness::session::STILL_IN_TERMINAL) || why.contains(harness::session::WORKS_IN_WORKTREE) || why.contains(harness::session::OPENS_SESSION) => Err(Error::Proposal(plain_refusal(&why, session))),
             Err(why) => {
                 if had_marker && refused_for_its_agent(&why) {
                     let _ = std::fs::write(&marker, b"");
@@ -693,6 +705,17 @@ impl RunService {
                 let waits = matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission);
                 return Err(Error::Proposal(if waits { HAND_OVER_WAITING } else { HAND_OVER_IN_TURN }.into()));
             }
+            // Opened in Terminal again: not while the Terminal opened before may still run it, or is still opening.
+            if run.handed_over {
+                let opened = self.opened_terminal.lock().unwrap_or_else(|e| e.into_inner()).get(&run.id).copied();
+                if opened.is_some_and(|at| at.elapsed() < self.terminal_grace) {
+                    return Err(Error::Proposal(TERMINAL_OPENING_AGAIN.into()));
+                }
+                let markers: Vec<&str> = harness::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
+                if let Some(pid) = harness::process::holding(&resumed_by, &session_folder(run), &markers, &[], &[]) {
+                    return Err(Error::Proposal(format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first.")));
+                }
+            }
             if follow.closed {
                 // The harness marks a closed session handed over as it is; the app no longer follows it, so it reads
                 // the mark here.
@@ -702,6 +725,20 @@ impl RunService {
                     run.last_detail = Some(super::consumer::HANDED_OVER.into());
                     Vec::new()
                 }).await?;
+                // The app may read it closed while the harness runs it, as after a take back whose answer was lost:
+                // Terminal opens once the harness's listing says its agent has gone.
+                let gone = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
+                    loop {
+                        match link.listed(session).await {
+                            Some(row) if row["running"] != true => return true,
+                            Some(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                            None => return false,
+                        }
+                    }
+                });
+                if !matches!(gone.await, Ok(true)) {
+                    return Err(Error::Proposal(HANDED_OVER_NOT_GONE.into()));
+                }
                 if let Some(why) = link.kept(session).await {
                     return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}. Terminal didn't open.", plain_refusal(&why, session).trim_end_matches('.'))));
                 }
@@ -748,6 +785,7 @@ impl RunService {
             // The script runs `claude` only while this exists, and a take back removes it first.
             let marker = self.terminal_marker(run);
             std::fs::DirBuilder::new().recursive(true).create(&dir)?;
+            let _ = std::fs::remove_file(super::control::claimed_of(&marker));
             std::fs::write(&marker, b"")?;
             let file = super::control::write_attach_guarded(&dir, tc.login.as_ref(), &program, &session_folder(run), &words, Some(&marker))?;
             self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))?;

@@ -207,8 +207,19 @@ fn interpreted(args: &[String]) -> Option<&str> {
     None
 }
 
+/// What `pid` was started as, by the name you would see in `ps`: its first argument's file name, else its program's.
+pub fn program_name(pid: u32) -> Option<String> {
+    let file_name = |path: &std::path::Path| path.file_name().and_then(|name| name.to_str()).map(str::to_owned);
+    args_of(pid).and_then(|args| args.first().and_then(|first| file_name(std::path::Path::new(first)))).or_else(|| program_of(pid).and_then(|path| file_name(&path)))
+}
+
+/// Whether `pid`'s arguments name the session id `id`, as a word of their own.
+pub fn names_id(pid: u32, id: &str) -> bool {
+    id.len() >= ID_LEAST && args_of(pid).is_some_and(|args| args.iter().skip(1).any(|arg| holds_word(arg, id)))
+}
+
 /// The shortest provider id the check looks for in other processes' arguments.
-const ID_LEAST: usize = 16;
+pub const ID_LEAST: usize = 16;
 
 /// Whether `text` holds `word` with no letter or digit on either side, as a path or a `--resume=` names an id, and
 /// not as a part of a longer word does.
@@ -729,6 +740,13 @@ pub mod seam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_providers_session_id_is_long_enough_for_the_check_to_look_for_it() {
+        for provider in crate::provider::Provider::ALL {
+            assert!(provider.session_id_example().len() >= ID_LEAST, "{}: a shorter id turns the id match off", provider.name());
+        }
+    }
 
     #[test]
     fn an_id_is_held_only_as_a_word_of_its_own() {

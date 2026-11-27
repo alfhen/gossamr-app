@@ -432,6 +432,11 @@ impl Store {
         Ok(())
     }
 
+    /// Whether session `id` was ever handed over to Terminal, as its events say.
+    pub fn was_handed_over(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND type = 'handed_over')", [id], |row| row.get(0))?)
+    }
+
     /// Every session's folder, by its id.
     pub fn session_folders(&self) -> Result<Vec<(String, PathBuf)>> {
         use std::os::unix::ffi::OsStringExt;

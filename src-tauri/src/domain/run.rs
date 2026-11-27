@@ -813,6 +813,10 @@ pub struct SessionFollow {
     /// says why, so the drop that follows is not said again as a message the session ended before.
     #[serde(default)]
     pub held_in_terminal: bool,
+    /// What the run read before its session was resumed, until a turn starts: a resume whose first prompt is dropped
+    /// leaves it so again, not working with an idle agent.
+    #[serde(default)]
+    pub before_resume: Option<RunState>,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

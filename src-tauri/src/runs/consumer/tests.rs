@@ -930,3 +930,14 @@ fn a_drop_for_terminal_names_why_and_a_dropped_text_that_quotes_those_words_is_o
     assert!(played.rows.iter().any(|row| row.text == quoted && row.kind == "update"), "the dropped text is a row of its own");
     assert!(!played.rows.iter().any(|row| row.text == NOT_DELIVERED), "not said as a session that ended");
 }
+
+#[test]
+fn a_resume_whose_first_prompt_is_dropped_reads_as_it_did_before_it() {
+    let said = format!("A `claude` (pid 41) {}. Quit it, then message the agent.", harness::session::WORKS_IN_WORKTREE);
+    let mut played = Played::new();
+    played.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }, Body::Closed { by: ClosedBy::Stop }]);
+    let before = played.run.state;
+    played.play([Body::Started { provider_session: "p".into(), resumed: true }, Body::Notice { text: said.clone() }, Body::PromptsDropped]);
+    assert_eq!(played.run.state, before, "not working with an idle agent");
+    assert_eq!(played.run.last_detail.as_deref(), Some(said.as_str()));
+}
