@@ -34,9 +34,14 @@ pub enum Body {
     /// A turn began, prompted or not. A driver sends it once per turn, before anything the turn says, and ends every
     /// turn it starts with exactly one `turn_ended` or `failed`.
     TurnStarted,
-    /// A whole block of the agent's text, masked before anyone sees it. A driver that reads text in pieces joins them
-    /// and sends the block once it ends; streamed pieces come with H15.
+    /// A whole block of the agent's text, masked before anyone sees it. A driver that reads text in pieces sends them
+    /// as `text_delta`s, then the whole block once it ends.
     Text { text: String },
+    /// A piece of a block as it streams, for live clients only: it is never stored, and is numbered 0. A driver cuts
+    /// it at character boundaries. The harness sends it masked, and holds what could still become a secret until more
+    /// text decides it, so live text can trail the turn's other events. It is provisional: the block's `text` always
+    /// follows, unless the turn ends first, and replaces the pieces.
+    TextDelta { text: String },
     ToolCall { id: String, name: String, input: Value },
     /// A call to a tool the client declared. The client posts its result.
     ClientToolCall { id: String, name: String, input: Value },
@@ -302,7 +307,8 @@ mod tests {
             Body::Notice { .. } => 18,
             Body::HandedOver => 19,
             Body::Closed { .. } => 20,
-            Body::Withheld { .. } => 21,
+            Body::TextDelta { .. } => 21,
+            Body::Withheld { .. } => 22,
         }
     }
 
@@ -331,6 +337,7 @@ mod tests {
             Body::Notice { text: "t".into() },
             Body::HandedOver,
             Body::Closed { by: ClosedBy::Stop },
+            Body::TextDelta { text: "t".into() },
         ]
     }
 

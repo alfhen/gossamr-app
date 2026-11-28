@@ -945,6 +945,7 @@ impl Harness {
             });
             return Err(e);
         }
+        let secrets_for_live = secrets.clone();
         let task = Task {
             inner: self.inner.clone(),
             id: id.to_owned(),
@@ -960,6 +961,7 @@ impl Harness {
             result_schema: schema,
             broken: AtomicBool::new(false),
             ended,
+            live: Mutex::new(redact::LiveText::new(&secrets_for_live)),
         };
         for text in notices {
             task.emit(Body::Notice { text });
@@ -1468,6 +1470,8 @@ struct Task {
     broken: AtomicBool,
     /// How the agent's process ended, if its driver says.
     ended: oneshot::Receiver<AgentEnd>,
+    /// The block the agent is streaming, on its way to live clients.
+    live: Mutex<redact::LiveText>,
 }
 
 /// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
@@ -1643,6 +1647,7 @@ impl Task {
                         }
                         self.emit(question);
                     }
+                    Some(Body::TextDelta { text }) => self.delta(&text),
                     Some(body @ Body::Started { .. }) => {
                         if !self.started(body) {
                             by = ClosedBy::Harness;
@@ -1664,6 +1669,7 @@ impl Task {
                             slot = None;
                             self.open_requests().clear();
                             release(&mut held_ask);
+                            self.live_text().reset();
                         }
                         // Kept before the turn's end is, so no record shows the deny or the cancel without it.
                         if let Some(why) = no_carry_on_after(&body).or(open_when_cut.then_some(crate::store::OPEN_REQUEST_STOPPED))
@@ -2225,6 +2231,19 @@ impl Task {
     /// clients get one `failed` event and the last `closed`, numbered 0 since no number could be given, and the
     /// session stops; nothing is written after that, even if the store would take it again.
     fn emit(&self, body: Body) -> bool {
+        match &body {
+            Body::TextDelta { text } => {
+                self.delta(text);
+                return true;
+            }
+            // What was held of the block goes out before the block, which replaces it. A text that is not the
+            // streamed block's (a driver that streams one thread and reports another) leaves it streaming.
+            Body::Text { text } => {
+                let rest = Some(self.live_text()).filter(|live| live.is_start_of(text)).map(|mut live| live.end());
+                self.send_delta(rest.unwrap_or_default());
+            }
+            _ => {}
+        }
         // Cut after redaction, so a secret cut in half is masked whole first.
         let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
         self.keep(body, cut)
@@ -2256,6 +2275,22 @@ impl Task {
                 }
                 false
             }
+        }
+    }
+
+    fn live_text(&self) -> MutexGuard<'_, redact::LiveText> {
+        self.live.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Sends what of a streamed piece may go out now (`redact::LiveText`), live only.
+    fn delta(&self, piece: &str) {
+        let out = self.live_text().push(piece);
+        self.send_delta(out);
+    }
+
+    fn send_delta(&self, text: String) {
+        if !text.is_empty() && !self.broken.load(Ordering::Relaxed) {
+            self.publish(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text }, cut: None });
         }
     }
 

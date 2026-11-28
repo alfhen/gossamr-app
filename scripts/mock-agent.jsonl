@@ -1,5 +1,10 @@
 {"capabilities": {"tool_call_limit_ms": 600000}}
 {"prompt": null}
+{"delta": "Reading the "}
+{"sleep": 400}
+{"delta": "ticket and "}
+{"sleep": 400}
+{"delta": "the code."}
 {"say": "Reading the ticket and the code."}
 {"sleep": 1500}
 {"tool": {"name": "Read", "input": {"file_path": "README.md"}}}
