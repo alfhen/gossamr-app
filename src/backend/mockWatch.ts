@@ -117,6 +117,10 @@ export interface MockHandle {
   startAgent(key: string, role: string, over?: { brief?: string; pr?: number; repo?: string }): string;
   /** Has working run `id` ask the person `question`, as `MockRuns.ask` does. */
   askRun(id: string, question: string): void;
+  /** Has working run `id` stream `piece` of its current block, as `MockRuns.stream` does. */
+  streamText(id: string, piece: string): void;
+  /** Ends run `id`'s block with its whole `text`, which becomes a row of its timeline, as `MockRuns.say` does. */
+  sayText(id: string, text: string): void;
   /** Has working run `id` ask permission for `needs` (`approve Bash: git push`), as `MockRuns.askPermission` does. */
   askPermission(id: string, needs: string): void;
   /** Has working run `id` be blocked on Claude's sign-in, as `MockRuns.block` does. */
@@ -197,7 +201,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; withdrawPermission(id: string, request: string): unknown; readonly permissionAnswers: readonly { run: string; request: string; decision: "allow" | "deny" }[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; stream(id: string, piece: string): void; say(id: string, text: string): void; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; withdrawPermission(id: string, request: string): unknown; readonly permissionAnswers: readonly { run: string; request: string; decision: "allow" | "deny" }[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
@@ -219,7 +223,7 @@ declare global {
 /**
  * The scripted runs never move by themselves, so in a dev browser (never a build, never a test outside a browser) the sample
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
- * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `askPermission(id, needs)` has a run ask permission, `attached()` lists the runs Terminal was opened on, `workFolderReveals()` counts the times the work folder was shown in Finder, `providerReveals()` lists the provider folders shown there, `reviewDrafts()` lists the GitHub review drafts, `launches()` lists every
+ * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `askPermission(id, needs)` has a run ask permission, `streamText(id, piece)` has a working run stream a piece of its block and `sayText(id, text)` end the block with its whole text, `attached()` lists the runs Terminal was opened on, `workFolderReveals()` counts the times the work folder was shown in Finder, `providerReveals()` lists the provider folders shown there, `reviewDrafts()` lists the GitHub review drafts, `launches()` lists every
  * launch with the guard the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
@@ -239,6 +243,8 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
       return runs.pipStart({ workstream: ws, role, brief: over.brief ?? "Look into this work and report what you found.", repo: over.repo ?? null, pr: over.pr ?? null, item: { connectionId: "mock", externalId: key, key } }, `handle-${Date.now()}-${Math.random()}`).id;
     },
     askRun: (id, question) => void runs.ask(id, question),
+    streamText: (id, piece) => runs.stream(id, piece),
+    sayText: (id, text) => runs.say(id, text),
     askPermission: (id, needs) => void runs.askPermission(id, needs),
     blockRun: (id) => void runs.block(id),
     loseRun: (id) => void runs.lose(id),

@@ -103,18 +103,45 @@ struct Inner {
     choosing: tokio::sync::Mutex<()>,
     /// The runtime the link started on: a change of Settings comes from a thread that has none.
     runtime: tokio::runtime::Handle,
+    /// Where a working run's streamed text goes.
+    live: std::sync::OnceLock<LiveSink>,
+    /// The block each session streams: its run, the run's connection and the text so far.
+    streaming: std::sync::Mutex<std::collections::HashMap<String, Stream>>,
     /// How many of the next follows fail, for a test of what a failed follow leaves.
     #[cfg(test)]
     failing_follows: std::sync::atomic::AtomicUsize,
+}
+
+pub type LiveSink = Arc<dyn Fn(&LiveBlock) + Send + Sync>;
+
+/// A working run's block as far as it has streamed, for the page.
+pub struct LiveBlock<'a> {
+    pub connection_id: &'a str,
+    pub run_id: &'a str,
+    /// Masked and cut as its row will be. Empty when the block ended.
+    pub text: &'a str,
+    /// When the harness sent what this adds, by its clock.
+    pub sent_ms: i64,
+}
+
+struct Stream {
+    run_id: String,
+    connection_id: String,
+    text: String,
 }
 
 impl Link {
     /// Starts the watching task, which follows every session the app's runs still follow.
     pub fn start(core: Arc<Core>, connect: Arc<dyn Connect>, tools: Arc<dyn ClientTools>, notifier: Arc<dyn RunNotifier>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Link {
         let (commands, received) = mpsc::unbounded_channel();
-        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), permissions: std::sync::Mutex::new(AgentPermissions::Ask), choosing: tokio::sync::Mutex::new(()), runtime: tokio::runtime::Handle::current(), #[cfg(test)] failing_follows: Default::default() });
+        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), permissions: std::sync::Mutex::new(AgentPermissions::Ask), choosing: tokio::sync::Mutex::new(()), runtime: tokio::runtime::Handle::current(), live: Default::default(), streaming: Default::default(), #[cfg(test)] failing_follows: Default::default() });
         tokio::spawn(watching(Arc::downgrade(&inner), received));
         Link { inner }
+    }
+
+    /// Sends each run's streamed text to `sink` from now on.
+    pub fn on_live_text(&self, sink: LiveSink) {
+        let _ = self.inner.live.set(sink);
     }
 
     /// Makes a call on a connection of its own and waits for its answer. A call that can start a session again has the
@@ -774,8 +801,49 @@ impl Inner {
         Ok(())
     }
 
+    /// Adds a streamed piece to its block and sends the page the block so far.
+    async fn streamed(&self, session: &str, piece: &str, sent_ms: i64) {
+        let Some(live) = self.live.get() else { return };
+        let known = self.streams().get(session).map(|streamed| (streamed.run_id.clone(), streamed.connection_id.clone()));
+        let (run_id, connection_id) = match known {
+            Some(known) => known,
+            None => {
+                let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
+                let Ok(Some(run)) = self.core.run(&run_id).await else { return };
+                (run_id, run.connection_id)
+            }
+        };
+        let text = {
+            let mut streams = self.streams();
+            let stream = streams.entry(session.to_owned()).or_insert_with(|| Stream { run_id: run_id.clone(), connection_id: connection_id.clone(), text: String::new() });
+            stream.text.push_str(piece);
+            consumer::live_text(&stream.text)
+        };
+        live(&LiveBlock { connection_id: &connection_id, run_id: &run_id, text: &text, sent_ms });
+    }
+
+    /// The session's block ended, or its turn did: the page drops what it streamed once the block's row is read.
+    fn stream_ended(&self, session: &str, sent_ms: i64) {
+        let ended = self.streams().remove(session);
+        if let (Some(live), Some(ended)) = (self.live.get(), ended) {
+            live(&LiveBlock { connection_id: &ended.connection_id, run_id: &ended.run_id, text: "", sent_ms });
+        }
+    }
+
+    fn streams(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Stream>> {
+        self.streaming.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Applies a pushed event. An error means it was not stored, and nothing after it may be.
     async fn take(&self, session: &str, event: Event) -> Result<(), ()> {
+        if let Body::TextDelta { text } = &event.body {
+            self.streamed(session, text, event.ms).await;
+            return Ok(());
+        }
+        // Said before the block's row is, so the page never shows the block twice.
+        if matches!(event.body, Body::Text { .. } | Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed { .. } | Body::HandedOver) {
+            self.stream_ended(session, event.ms);
+        }
         if let Some(of) = consumer::unreadable(&event.body) {
             if self.unread.lock().unwrap_or_else(|e| e.into_inner()).insert(of.to_owned()) {
                 eprintln!("the harness sent an event this build cannot read ({of}); its number is passed over");

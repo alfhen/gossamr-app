@@ -15,7 +15,7 @@ import { PermissionAsk } from "./PermissionAsk";
 import { PermissionRequests, useClosingIn } from "./PermissionRequests";
 import { openPermissions, permissionsRow } from "./permissionLogic";
 import { useStateView } from "./useStateView";
-import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
+import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, streamedLine, type Tone } from "./agentsLogic";
 import { Button } from "../components/Button";
 import { CommitsAs } from "./CommitsAs";
 import { runsOnText, useRunInstance, type RunInstance } from "./runInstance";
@@ -265,7 +265,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
             </p>
           )}
           <p data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>
-            {progressText(run, runs)}
+            <Progress run={run} runs={runs} />
           </p>
           <RunsOnLine run={run} />
           <CommitsAs run={run} />
@@ -278,6 +278,12 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
       );
     }
   }
+}
+
+/** What a working run is doing: the last line of the block its agent is writing as it streams, else its last update. */
+function Progress({ run, runs }: { run: Run; runs?: readonly Run[] }) {
+  const streamed = useRuns((s) => (run.state === "working" && !s.live[run.id]?.ended ? s.live[run.id]?.text : undefined));
+  return <>{(streamed && streamedLine(streamed)) || progressText(run, runs)}</>;
 }
 
 /** `rowText` as an element, placing a run waiting for a slot in line among every run (`useSlotQueue`). */

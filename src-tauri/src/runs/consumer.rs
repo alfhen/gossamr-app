@@ -310,6 +310,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             }
         }
         Body::Withheld { .. } => {}
+        // Streamed text is the page's alone (`link`), and never moves a run.
+        Body::TextDelta { .. } => {}
     }
     waits(run, follow);
     if let Some(text) = announce_permissions(run) {
@@ -595,6 +597,14 @@ fn split_at_chars(text: &str, max: usize) -> (String, Option<String>) {
 
 fn cut(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
+}
+
+/// The most of a streamed block the page is sent: as much as its row keeps.
+const LIVE_KEPT: usize = TEXT_KEPT + DETAIL_KEPT;
+
+/// A streamed block as the page shows it until its row comes: masked, and cut as its row is.
+pub fn live_text(text: &str) -> String {
+    redact(&cut(text, LIVE_KEPT))
 }
 
 fn first_line(text: &str) -> Option<String> {

@@ -2244,3 +2244,123 @@ async fn a_turn_an_outside_signal_cut_with_a_request_open_may_not_carry_on_as_af
     let refused = harness.resume_with(&id, Some("carry on".into())).await.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(refused.contains(&format!("may not carry on: {}", harness::store::OPEN_REQUEST_STOPPED)), "{refused}");
 }
+
+/// How a streamed block ends in the session test of live text.
+#[derive(Clone, Copy, Debug)]
+enum BlockEnd {
+    /// With its whole text, as a driver ends one.
+    Text,
+    /// Its turn ends first, done or cancelled.
+    Done,
+    Cancelled,
+    /// Its turn fails.
+    Failed,
+    /// The agent exits with it unfinished, which closes the session.
+    Exit,
+}
+
+/// The steps of a turn that streams `pieces` of `block`, with a tool call after the first piece when `between`, and
+/// ends as `end` says.
+fn streamed(block: &str, pieces: &[&str], between: bool, end: BlockEnd) -> Vec<harness::mock::Step> {
+    use harness::mock::Step;
+    let mut steps = vec![Step::Turn];
+    for (n, piece) in pieces.iter().enumerate() {
+        steps.push(Step::Delta((*piece).to_owned()));
+        if between && n == 0 {
+            steps.push(Step::Tool { id: None, name: "Read".into(), input: json!({"file_path": "notes.md"}) });
+        }
+    }
+    steps.extend(match end {
+        BlockEnd::Text => vec![Step::Say(block.to_owned()), Step::End(TurnEnd::Done)],
+        BlockEnd::Done => vec![Step::End(TurnEnd::Done)],
+        BlockEnd::Cancelled => vec![Step::End(TurnEnd::Cancelled)],
+        BlockEnd::Failed => vec![Step::Fail("the model went away".into())],
+        BlockEnd::Exit => vec![Step::Exit(0)],
+    });
+    steps
+}
+
+/// Every shape's example, and each glued to the next, in prose, cut into two pieces anywhere near its marker or its
+/// glue, and every so often elsewhere, and into three with both cuts near the marker: no client and none of the store's
+/// files see 8 characters of a secret past its marker. The splits take turns at each way a block ends, with and
+/// without an unrelated event between the pieces, and the agent's exit ends the last. Pieces are never stored, are
+/// numbered 0, and those of a block that ends with its text join to that text. `redact`'s own test splits every way
+/// into two and three; this one shows the session sends and keeps nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_text_a_streamed_secret_split_anywhere_reaches_no_client_and_none_of_the_stores_files() {
+    use harness::redact::SHAPES;
+    let examples: Vec<(String, usize)> = SHAPES
+        .iter()
+        .map(|shape| {
+            let example = (shape.example)();
+            let marker = shape.markers.iter().find(|m| example.get(..m.len()).is_some_and(|head| head.eq_ignore_ascii_case(m))).expect("an example starts with its marker");
+            (example, marker.len())
+        })
+        .collect();
+    let windows = |secret: &str, marker: usize| -> Vec<String> {
+        let body: Vec<char> = secret.chars().skip(marker).collect();
+        body.windows(8).map(|window| window.iter().collect()).collect()
+    };
+    let ends = [BlockEnd::Text, BlockEnd::Done, BlockEnd::Cancelled, BlockEnd::Failed];
+    for (n, (example, marker)) in examples.iter().enumerate() {
+        let (next, next_marker) = &examples[(n + 1) % examples.len()];
+        let start = "Here: ".len();
+        let mut leaks = windows(example, *marker);
+        leaks.extend(windows(next, *next_marker));
+        let mut splits: Vec<(String, Vec<usize>)> = vec![];
+        for block in [format!("Here: {example} and on."), format!("Here: {example}{next} and on.")] {
+            let glue = start + example.len();
+            let near = |at: usize| at.abs_diff(start) <= marker + 10 || at.abs_diff(glue) <= next_marker + 10;
+            for one in (1..block.len()).filter(|at| near(*at) || at % 13 == 0) {
+                splits.push((block.clone(), vec![one]));
+            }
+            for one in (start..=start + marker + 8).step_by(2) {
+                for two in (one + 1..(one + 16).min(block.len())).step_by(3) {
+                    splits.push((block.clone(), vec![one, two]));
+                }
+            }
+        }
+        let mut steps = vec![];
+        let mut blocks = 0usize;
+        for (k, (block, cuts)) in splits.iter().enumerate() {
+            let bounds: Vec<usize> = [0].into_iter().chain(cuts.iter().copied()).chain([block.len()]).collect();
+            let pieces: Vec<&str> = bounds.windows(2).map(|w| &block[w[0]..w[1]]).collect();
+            let last = k + 1 == splits.len();
+            let end = if last { BlockEnd::Exit } else { ends[k % ends.len()] };
+            steps.extend(streamed(block, &pieces, (k / ends.len()) % 2 == 1, end));
+            blocks += 1;
+        }
+        let (_tmp, dir) = data_dir();
+        let mock = harness::mock::Mock::new(harness::mock::Script { steps, ..Default::default() });
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        let live = until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+        let (mut block, mut texts) = (String::new(), 0);
+        for event in &live {
+            match &event.body {
+                Body::TextDelta { text } => {
+                    assert_eq!(event.seq, 0, "a piece is numbered 0");
+                    block.push_str(text);
+                }
+                Body::Text { text } => {
+                    assert!(block == *text, "the pieces of a block of {} do not join to its text", SHAPES[n].name);
+                    (block, texts) = (String::new(), texts + 1);
+                }
+                body if body.ends_turn() => block.clear(),
+                _ => {}
+            }
+        }
+        assert_eq!(texts, (0..blocks - 1).filter(|k| k % ends.len() == 0).count(), "a block that ends with its text gives one");
+        assert!(live.iter().any(|event| matches!(event.body, Body::TextDelta { .. })), "the pieces reached the client");
+        let stored = harness.events(&id, 0).unwrap();
+        assert!(stored.iter().all(|event| !matches!(event.body, Body::TextDelta { .. }) && event.seq > 0), "a piece was stored");
+        let shown = serde_json::to_string(&live).unwrap() + &serde_json::to_string(&stored).unwrap();
+        drop(harness);
+        let (rows, disk) = (every_row(&dir), bytes_on_disk(&dir));
+        // A failure names the shape, never the secret.
+        for leak in &leaks {
+            assert!(!shown.contains(leak.as_str()), "{} reached a client", SHAPES[n].name);
+            assert!(!rows.contains(leak.as_str()) && !contains(&disk, leak), "{} is in the store", SHAPES[n].name);
+        }
+    }
+}

@@ -337,10 +337,11 @@ async fn claude_every_native_fixture_projects_as_its_golden_file() {
         let (rig, seen) = play(&fixture).await;
         assert_eq!(rig.report(), "", "{}: the replay refused a line", name(&fixture));
         let seen = as_recorded_tools(&seen, &endpoint(&rig).0, recorded_endpoint(&lines_of(&fixture)).as_deref());
-        // The driver adds usage on purpose; H2's converter gives none, and it has a test of its own. The locked
-        // recordings play as normal sessions that ask for each step, so the notice their `dontAsk` gets is the replay's.
+        // The driver adds usage and streamed pieces on purpose; H2's converter gives neither, and each has a test of
+        // its own. The locked recordings play as normal sessions that ask for each step, so the notice their `dontAsk`
+        // gets is the replay's.
         let replays_mode = |body: &Body| matches!(body, Body::Notice { text } if text.starts_with(harness::claude::driver::NOT_MANUAL));
-        let seen: Vec<Event> = seen.into_iter().filter(|event| !matches!(event.body, Body::Usage { .. }) && !replays_mode(&event.body)).collect();
+        let seen: Vec<Event> = seen.into_iter().filter(|event| !matches!(event.body, Body::Usage { .. } | Body::TextDelta { .. }) && !replays_mode(&event.body)).collect();
         let got = as_the_mock_orders_it(project(&as_the_mock_names_the_session(&seen))).join("\n") + "\n";
         let want = std::fs::read_to_string(goldens.join(name(&fixture)).with_extension("txt")).unwrap();
         if got != want {
@@ -352,6 +353,39 @@ async fn claude_every_native_fixture_projects_as_its_golden_file() {
         eprintln!("== {name}\n-- driver\n{got}-- golden\n{want}");
     }
     assert!(differ.is_empty(), "the driver's projection differs from the golden file for {names:?}");
+}
+
+/// Claude streams each block of text before it sends it whole: on every recording, the pieces a live client sees are
+/// numbered 0, none is stored, and the whole block always follows them before the turn ends. The recordings were
+/// redacted with their pieces joined, and the replay maps their ids in a whole block, so a block's pieces match its text
+/// only on the mock (`live_text_` in `tests/sessions.rs`).
+#[tokio::test]
+async fn claude_streamed_pieces_are_live_only_and_their_block_follows_them_on_every_native_fixture() {
+    let mut streamed = 0;
+    for fixture in fixtures() {
+        let rig = rig(&fixture, &[]);
+        let (acts, results) = recorded_client(&lines_of(&fixture));
+        let (id, mut events) = rig.open(false, None).await;
+        let (seen, _) = drive(&rig, &id, &mut events, acts, results).await;
+        let mut pieces = 0;
+        for event in &seen {
+            match &event.body {
+                Body::TextDelta { .. } => {
+                    assert_eq!(event.seq, 0, "{}: a piece is numbered 0", name(&fixture));
+                    pieces += 1;
+                }
+                Body::Text { .. } => {
+                    streamed += usize::from(pieces > 0);
+                    pieces = 0;
+                }
+                body if body.ends_turn() => assert_eq!(pieces, 0, "{}: pieces with no block after them", name(&fixture)),
+                _ => {}
+            }
+        }
+        let stored = rig.harness.events(&id, 0).unwrap();
+        assert!(stored.iter().all(|event| !matches!(event.body, Body::TextDelta { .. })), "{}: a piece was stored", name(&fixture));
+    }
+    assert!(streamed > 10, "the recordings stream their blocks");
 }
 
 #[tokio::test]

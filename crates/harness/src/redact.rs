@@ -1,9 +1,16 @@
 //! Masks secrets in an event before it is stored or sent: the session's own secrets, and token shapes. It masks
 //! shapes, not private text, which is why a locked session stores no payload at all.
+//!
+//! Live text fails closed. [`LiveText`] sends a block's streamed text only up to the earliest marker that could still
+//! become a secret, or the start of one, and holds the rest until more text decides it. What it sends is masked by
+//! [`text`], cut where the rest of the block cannot change how it is masked, so the pieces joined are the block as
+//! it is stored.
 
 use std::sync::LazyLock;
 
 use regex::Regex;
+use regex_automata::hybrid::dfa::{Cache, DFA};
+use regex_automata::{Anchored, Input};
 use serde_json::Value;
 
 use crate::event::Body;
@@ -379,6 +386,187 @@ pub fn body(body: Body, secrets: &[String]) -> Body {
     serde_json::from_value(value).expect("masking a string keeps the body's shape")
 }
 
+/// Each shape as a lazy DFA, to tell whether the text from one of its markers could still grow into its secret.
+static GROWING: LazyLock<Vec<DFA>> = LazyLock::new(|| SHAPES.iter().map(|shape| DFA::new(shape.pattern).expect("the shape compiles")).collect());
+
+/// What comes before a URL's user and password.
+const SCHEME_END: &str = "://";
+
+/// The most of a block live text holds undecided. Past it, the rest of the block goes out only when the block ends:
+/// each piece is read again from the start of what is held, so a long held stretch would cost time that grows with
+/// its square.
+pub const HOLD_MOST: usize = 16 << 10;
+
+/// One session's streamed block on its way to live clients. `push` takes each piece and gives what may go out now;
+/// `end`, when the block ends, gives the rest.
+pub struct LiveText {
+    secrets: Vec<String>,
+    /// The block so far.
+    raw: String,
+    /// How much of `raw` has gone out.
+    sent: usize,
+    caches: Vec<Cache>,
+}
+
+impl LiveText {
+    pub fn new(secrets: &[String]) -> LiveText {
+        let secrets = secrets.iter().filter(|secret| !secret.is_empty()).cloned().collect();
+        LiveText { secrets, raw: String::new(), sent: 0, caches: GROWING.iter().map(DFA::create_cache).collect() }
+    }
+
+    pub fn push(&mut self, piece: &str) -> String {
+        self.raw.push_str(piece);
+        if self.raw.len() - self.sent > HOLD_MOST {
+            return String::new();
+        }
+        let cut = cut(&self.raw, self.sent, &self.secrets, &mut self.caches);
+        self.release(cut)
+    }
+
+    /// The block ended: the rest goes out, decided now that no more of it can come, as the stored block is.
+    pub fn end(&mut self) -> String {
+        let out = self.release(self.raw.len());
+        self.reset();
+        out
+    }
+
+    /// Whether `block` goes on from what was streamed, as the block a driver sends after its pieces does.
+    pub fn is_start_of(&self, block: &str) -> bool {
+        block.starts_with(&self.raw)
+    }
+
+    /// The block ended with no text of its own (its turn ended or failed first): what was held is dropped.
+    pub fn reset(&mut self) {
+        self.raw.clear();
+        self.sent = 0;
+    }
+
+    fn release(&mut self, cut: usize) -> String {
+        if cut <= self.sent {
+            return String::new();
+        }
+        let out = text(&self.raw[self.sent..cut], &self.secrets);
+        self.sent = cut;
+        out
+    }
+}
+
+/// How far `raw` may go out now, from `from`. Cut there, the rest of the block cannot change how the part before is
+/// masked, so masking the part alone masks it as the whole block is masked:
+/// - no secret, nothing that could still grow into one, and no copy of the session's own secret reaches across it;
+/// - nothing at the end of the part could start a marker;
+/// - the character before it is white space or punctuation that is no part of a word or an escape, so a marker after
+///   it starts a word ([`key_starts`]) and a URL's scheme a word boundary, alone as in the whole block.
+fn cut(raw: &str, from: usize, secrets: &[String], caches: &mut [Cache]) -> usize {
+    let mut cut = held_start(raw, from).unwrap_or(raw.len());
+    let mut spans = vec![];
+    let scans = &mut Scans::new();
+    let mut at = from;
+    while let Some(marker) = MARKERS.find_at(raw, at).map(|found| found.start()).filter(|marker| *marker < cut) {
+        match marker_span(raw, marker, caches, scans) {
+            Some(end) if end >= raw.len() => cut = marker,
+            Some(end) => spans.push((marker, end)),
+            None => {}
+        }
+        at = marker + raw[marker..].chars().next().map_or(1, char::len_utf8);
+    }
+    let mut at = from;
+    while let Some(scheme) = raw[at..].find(SCHEME_END).map(|found| at + found).filter(|scheme| *scheme < cut) {
+        let in_scheme = |c: char| c.is_ascii_alphanumeric() || "+.-".contains(c);
+        let start = raw[from..scheme].char_indices().rfind(|(_, c)| !in_scheme(*c)).map_or(from, |(before, c)| from + before + c.len_utf8());
+        match raw[scheme + SCHEME_END.len()..].find(|c: char| c.is_whitespace() || "\"<>".contains(c)) {
+            Some(stop) => spans.push((start, scheme + SCHEME_END.len() + stop)),
+            None => cut = cut.min(start),
+        }
+        at = scheme + SCHEME_END.len();
+    }
+    loop {
+        let was = cut;
+        while cut > from && !raw[..cut].chars().next_back().is_some_and(neutral) {
+            cut -= raw[..cut].chars().next_back().map_or(1, char::len_utf8);
+        }
+        for secret in secrets {
+            cut = cut.min(copy_start(raw, from, cut, secret).unwrap_or(cut));
+        }
+        for (start, end) in &spans {
+            if *start < cut && cut < *end {
+                cut = *start;
+            }
+        }
+        if cut == was {
+            return cut;
+        }
+    }
+}
+
+/// A character a cut may follow. Not `_`, a word character, nor `%` or a backslash, which start the escapes
+/// [`key_starts`] reads before a key.
+fn neutral(c: char) -> bool {
+    c.is_whitespace() || (c.is_ascii_punctuation() && !"_%\\".contains(c))
+}
+
+/// Where the end of `raw` could be the start of a marker, or of a URL's `://`.
+fn held_start(raw: &str, from: usize) -> Option<usize> {
+    let starts = |tail: &str| {
+        SHAPES.iter().flat_map(|shape| shape.markers.iter().map(move |marker| (*marker, shape.any_case))).chain([(SCHEME_END, false)]).any(|(marker, any_case)| {
+            marker.len() > tail.len() && if any_case { marker[..tail.len()].eq_ignore_ascii_case(tail) } else { marker.starts_with(tail) }
+        })
+    };
+    let longest = SHAPES.iter().flat_map(|shape| shape.markers.iter()).map(|marker| marker.len()).max().unwrap_or(0);
+    (from.max(raw.len().saturating_sub(longest))..raw.len()).filter(|at| raw.is_char_boundary(*at)).find(|at| starts(&raw[*at..]))
+}
+
+/// The most that may be masked from the marker at `marker`, as far as `raw` goes, whether or not [`key_starts`] would
+/// mask it there: `raw`'s end when it could still grow. None when no shape's secret starts there.
+fn marker_span(raw: &str, marker: usize, caches: &mut [Cache], scans: &mut Scans) -> Option<usize> {
+    let rest = &raw[marker..];
+    let mut most = None;
+    for (n, shape) in COMPILED.iter().enumerate() {
+        let here = shape.markers.iter().any(|m| rest.get(..m.len()).is_some_and(|head| if shape.any_case { head.eq_ignore_ascii_case(m) } else { head == *m }));
+        if !here {
+            continue;
+        }
+        if grows(raw, marker, &GROWING[n], &mut caches[n]) {
+            return Some(raw.len());
+        }
+        if let Some(end) = scans.at(raw, n, marker) {
+            most = most.max(Some(mask_end(raw, marker, end, scans)));
+        }
+    }
+    most
+}
+
+/// Whether more text after `raw` could still make a longer secret of `dfa`'s shape from `marker`. A DFA that gives up
+/// says it could.
+fn grows(raw: &str, marker: usize, dfa: &DFA, cache: &mut Cache) -> bool {
+    let input = Input::new(raw).range(marker..).anchored(Anchored::Yes);
+    let Ok(mut state) = dfa.start_state_forward(cache, &input) else { return true };
+    for &byte in &raw.as_bytes()[marker..] {
+        match dfa.next_state(cache, state, byte) {
+            Ok(next) if next.is_dead() => return false,
+            Ok(next) => state = next,
+            Err(_) => return true,
+        }
+    }
+    true
+}
+
+/// Where a copy of `secret` that reaches across `cut`, or may still grow at `raw`'s end, starts. Any two characters
+/// of the secret on either side of the cut, or one of its characters at the end, may be part of one.
+fn copy_start(raw: &str, from: usize, cut: usize, secret: &str) -> Option<usize> {
+    let (bytes, secret) = (raw.as_bytes(), secret.as_bytes());
+    let holds = |part: &[u8]| secret.windows(part.len()).any(|window| window == part);
+    let across = cut > from && if cut == raw.len() { holds(&bytes[cut - 1..cut]) } else { holds(&bytes[cut - 1..=cut]) };
+    if !across {
+        return None;
+    }
+    let mut start = (from..cut).find(|start| cut - start <= secret.len() && holds(&bytes[*start..cut])).unwrap_or(from);
+    while !raw.is_char_boundary(start) {
+        start -= 1;
+    }
+    Some(start)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +696,182 @@ mod tests {
         let Body::ToolCall { input, .. } = super::body(Body::ToolCall { id: "t1".into(), name: "x".into(), input }, &[secret]) else { unreachable!() };
         assert!(input[MASK] == "literal", "the literal key lost its value");
         assert!(input[format!("{MASK} 2")] == "secret's", "the masked key is not numbered");
+    }
+
+    /// What live clients see of `pieces`, joined, after the block ends with its text.
+    fn live(pieces: &[&str], secrets: &[String]) -> String {
+        let mut live = LiveText::new(secrets);
+        let mut shown: String = pieces.iter().map(|piece| live.push(piece)).collect();
+        shown.push_str(&live.end());
+        shown
+    }
+
+    /// The first 8 characters in a row of `secret` past its marker that `shown` holds.
+    fn shows(shown: &str, secret: &str, marker: usize) -> Option<String> {
+        let body: Vec<char> = secret.chars().skip(marker).collect();
+        body.windows(8).map(|window| window.iter().collect::<String>()).find(|window| shown.contains(window.as_str()))
+    }
+
+    #[test]
+    fn live_text_goes_out_a_word_at_a_time_and_from_a_marker_waits_until_more_text_decides_it() {
+        let mut live = LiveText::new(&[]);
+        assert_eq!(live.push("ready to "), "ready to ");
+        assert_eq!(live.push("go now"), "go ", "a word goes out once it ends");
+        assert_eq!(live.push(" and see sk-"), "now and see ", "a marker waits");
+        assert_eq!(live.push("learn more."), "sk-learn more.", "decided: no secret");
+        let key = (SHAPES[2].example)();
+        assert_eq!(live.push(&format!(" a {key}")), " a ", "{} waits while it may still grow", SHAPES[2].name);
+        assert_eq!(live.push(" b"), format!("{MASK} "), "masked once its run ends; `b` could start `bearer`");
+        assert_eq!(live.end(), "b", "and goes out at the end, since it never became one");
+        assert_eq!(live.push("then -"), "then ", "a new block starts afresh, and `-` could start a key's header");
+        live.reset();
+        assert_eq!(live.push("fresh "), "fresh ", "a reset drops what was held");
+    }
+
+    #[test]
+    fn live_text_shows_the_prose_after_a_certificate_and_a_block_that_ends_on_bearer_shows_the_word() {
+        let mut live = LiveText::new(&[]);
+        let cert = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n";
+        let shown = live.push(cert) + &live.push("and then the prose goes on, live.");
+        assert_eq!(shown, format!("{cert}and then the prose goes on, live."), "a certificate is no private key");
+
+        let mut live = LiveText::new(&[]);
+        assert_eq!(live.push("Send it as a bearer"), "Send it as a ");
+        assert_eq!(live.end(), "bearer", "nothing came after it, so it is no secret");
+    }
+
+    #[test]
+    fn live_text_a_copy_of_the_sessions_token_sent_in_pieces_shows_no_16_characters_of_it() {
+        // CodeRabbit's case: the copy starts with the token's first characters again (`1234...` in `90ab...1234...`).
+        let token = format!("1234567890abcdef12345678fedcba98{}", "1".repeat(32));
+        let shown = live(&["90abcdef", "12345678", " "], std::slice::from_ref(&token));
+        assert_eq!(shown, format!("{MASK} "));
+        let shown = live(&["see 90ab", "cdef1234", "5678fedc", " then"], std::slice::from_ref(&token));
+        assert_eq!(shown, format!("see {MASK} then"));
+        // A secret with punctuation in it, where a word may end: a copy cut there is held, then masked whole.
+        let dotted = "a1b2.c3d4.e5f6.g7h8.i9j0".to_owned();
+        let shown = live(&["see a1b2.c3d4.", "e5f6.g7h8 then"], std::slice::from_ref(&dotted));
+        assert_eq!(shown, format!("see {MASK} then"));
+        let mut held = LiveText::new(std::slice::from_ref(&token));
+        assert_eq!(held.push("so: 90abcdef12345678"), "so: ", "a copy that may still grow waits");
+    }
+
+    #[test]
+    fn live_text_past_the_most_it_holds_sends_nothing_more_until_the_block_ends() {
+        let mut live = LiveText::new(&[]);
+        assert_eq!(live.push("Here: eyJ"), "Here: ");
+        let blob = noise(50, HOLD_MOST + 10, B64URL);
+        let shown: String = blob.as_bytes().chunks(1000).map(|piece| live.push(std::str::from_utf8(piece).unwrap())).collect();
+        assert_eq!(shown, "", "held, the JWT's start may still grow");
+        assert_eq!(live.push(". more"), "", "past the most it holds, even what decides it waits");
+        assert_eq!(live.end(), text(&format!("eyJ{blob}. more"), &[]), "the rest goes out with the block's end, as stored");
+    }
+
+    #[test]
+    fn live_text_masks_a_marker_inside_a_word_or_after_an_escape_as_the_store_does_wherever_the_pieces_are_cut() {
+        let key = format!("sk-{}", "abcdefghijklmnopqrstuvwxyzabcdefgh");
+        let mut live = LiveText::new(&[]);
+        for block in [
+            "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today".to_owned(),
+            format!("token=%41{key} and on"),
+            format!("line\\n{key} and on"),
+        ] {
+            let stored = text(&block, &[]);
+            assert_eq!(stored.contains(MASK), block.contains(&key), "the store masks the key after an escape, and no path");
+            for shown in every_split(&block, &mut live, true) {
+                assert!(shows(&shown, &key, 3).is_none(), "{block:?} shows {:?} live", shows(&shown, &key, 3));
+                assert!(shown == stored, "a split of {block:?} joined is not the block as stored: {shown:?}");
+            }
+        }
+    }
+
+    /// The examples of every shape, each with the length of the marker it starts with.
+    fn examples() -> Vec<(String, usize)> {
+        SHAPES
+            .iter()
+            .map(|shape| {
+                let example = (shape.example)();
+                let marker = shape.markers.iter().find(|m| example.get(..m.len()).is_some_and(|head| head.eq_ignore_ascii_case(m)));
+                (example.clone(), marker.unwrap_or_else(|| panic!("{} starts with a marker", shape.name)).len())
+            })
+            .collect()
+    }
+
+    /// Every way live clients can see `block` split into two pieces or three, joined. A push gives what it gives from
+    /// the text so far and how much of it went out before, never from where the pieces were cut (`cut`), so each first
+    /// piece is pushed once, each second piece once from each place a first one left, and each end once from each
+    /// place: every split is one path through these. `cross_check` also runs every split from scratch, to show it.
+    fn every_split(block: &str, live: &mut LiveText, cross_check: bool) -> std::collections::BTreeSet<String> {
+        // From `sent` of `block` gone out, the next piece, to `upto`: what it shows and how much has gone out after it.
+        let mut from = |sent: usize, upto: usize| {
+            live.reset();
+            live.raw.push_str(&block[..sent]);
+            live.sent = sent;
+            let mut out = live.push(&block[sent..upto]);
+            if upto == block.len() {
+                out.push_str(&live.end());
+            }
+            (out, live.sent)
+        };
+        let cuts: Vec<usize> = (1..block.len()).filter(|at| block.is_char_boundary(*at)).collect();
+        let (mut seconds, mut lasts) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let mut shown = std::collections::BTreeSet::new();
+        for &one in &cuts {
+            let (first, sent) = from(0, one);
+            let last = lasts.entry(sent).or_insert_with(|| from(sent, block.len()).0).clone();
+            shown.insert(format!("{first}{last}"));
+            for &two in cuts.iter().filter(|two| **two > one) {
+                let (second, after) = seconds.entry((sent, two)).or_insert_with(|| from(sent, two)).clone();
+                let last = lasts.entry(after).or_insert_with(|| from(after, block.len()).0).clone();
+                shown.insert(format!("{first}{second}{last}"));
+            }
+        }
+        if cross_check {
+            let mut fresh = std::collections::BTreeSet::new();
+            for &one in &cuts {
+                fresh.insert(live_pieces(&[&block[..one], &block[one..]]));
+                for &two in cuts.iter().filter(|two| **two > one) {
+                    fresh.insert(live_pieces(&[&block[..one], &block[one..two], &block[two..]]));
+                }
+            }
+            assert_eq!(fresh, shown, "the paths are not what splitting {block:?} from scratch shows");
+        }
+        shown
+    }
+
+    fn live_pieces(pieces: &[&str]) -> String {
+        live(pieces, &[])
+    }
+
+    /// Every shape's example, and every two of them glued, in prose, split anywhere into two pieces and into three. No
+    /// client sees 8 characters of a secret past its marker, and the pieces joined are the block as it is stored. A
+    /// block whose turn ends before its text shows less: only what was pushed, the start of one of these.
+    #[test]
+    fn live_text_every_secret_and_glued_pair_cut_anywhere_into_two_or_three_shows_nothing_past_its_marker() {
+        let examples = examples();
+        let mut blocks: Vec<(String, Vec<&(String, usize)>)> = examples.iter().map(|one| (format!("Here: {} and on.", one.0), vec![one])).collect();
+        for a in &examples {
+            for b in &examples {
+                blocks.push((format!("Here: {}{} and on.", a.0, b.0), vec![a, b]));
+            }
+        }
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+        std::thread::scope(|scope| {
+            for part in blocks.chunks(blocks.len().div_ceil(threads)) {
+                scope.spawn(move || {
+                    let mut live = LiveText::new(&[]);
+                    for (block, secrets) in part {
+                        let stored = text(block, &[]);
+                        let short = secrets.len() == 1 && block.len() <= 60;
+                        for shown in every_split(block, &mut live, short) {
+                            for (secret, marker) in secrets {
+                                assert!(shows(&shown, secret, *marker).is_none(), "{block:?} shows {:?} live", shows(&shown, secret, *marker));
+                            }
+                            assert!(shown == stored, "a split of {block:?} joined is not the block as stored: {shown:?}");
+                        }
+                    }
+                });
+            }
+        });
     }
 }

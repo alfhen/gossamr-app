@@ -736,6 +736,17 @@ impl Stream {
                 }
                 self.begin();
             }
+            // A piece of the main thread's text as it streams; its whole block follows as `assistant`.
+            Some("stream_event")
+                if line["parent_tool_use_id"].is_null()
+                    && line["event"]["type"] == "content_block_delta"
+                    && line["event"]["delta"]["type"] == "text_delta" =>
+            {
+                if let Some(text) = line["event"]["delta"]["text"].as_str().filter(|text| !text.is_empty()) {
+                    self.begin();
+                    self.emit(Body::TextDelta { text: text.to_owned() });
+                }
+            }
             Some("assistant") => {
                 self.begin();
                 for block in line["message"]["content"].as_array().into_iter().flatten() {
@@ -928,6 +939,21 @@ mod tests {
             w.agent(line);
         }
         assert_eq!(w.said(), Vec::<Body>::new());
+    }
+
+    #[test]
+    fn a_streamed_piece_of_the_main_threads_text_is_a_text_delta_and_a_subagents_or_a_thought_is_not() {
+        let mut w = wire();
+        w.stream.prompt("go".into());
+        w.agent(init());
+        w.said();
+        let delta = |delta: Value, parent: Value| json!({"type": "stream_event", "event": {"type": "content_block_delta", "index": 1, "delta": delta}, "parent_tool_use_id": parent});
+        w.agent(delta(json!({"type": "text_delta", "text": "Read"}), Value::Null));
+        w.agent(delta(json!({"type": "text_delta", "text": "ing"}), json!("toolu_1")));
+        w.agent(delta(json!({"type": "thinking_delta", "thinking": "hm"}), Value::Null));
+        w.agent(delta(json!({"type": "text_delta", "text": ""}), Value::Null));
+        w.agent(json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Read"}]}}));
+        assert_eq!(w.said(), [Body::TextDelta { text: "Read".into() }, Body::Text { text: "Read".into() }]);
     }
 
     fn can_use_tool(id: &str, tool: &str) -> Value {

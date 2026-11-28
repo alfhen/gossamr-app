@@ -19,6 +19,7 @@ import type {
   RunQuery,
   RunOutcome,
   RunsChanged,
+  RunText,
   AgentSettings,
   HarnessAction,
   HarnessStatus,
@@ -372,6 +373,10 @@ export class JiraBackend implements Backend {
 
   onRunsChanged(listener: (change: RunsChanged) => void) {
     return onChanged("runs", listener);
+  }
+
+  onRunText(listener: (live: RunText) => void) {
+    return onChanged("liveText", (change) => change.live && listener(change.live));
   }
 
   onOpenRun(listener: (runId: string) => void) {

@@ -158,6 +158,39 @@ async fn a_run_follows_its_session_from_its_first_event_to_done() {
     bed.end().await;
 }
 
+const STREAMS: &str = r#"{"prompt": null}
+{"delta": "Looking at "}
+{"delta": "the cart. "}
+{"say": "Looking at the cart. "}
+{"tool": {"name": "Bash", "input": {"command": "cargo test"}}}
+{"tool_result": {"output": "ok"}}
+{"delta": "All "}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_streamed_block_reaches_the_page_as_it_comes_and_its_end_is_said_before_its_row() {
+    let mut bed = Bed::new(STREAMS).await;
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (changes, lives) = (heard.clone(), heard.clone());
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |_| changes.lock().unwrap().push("changed".into()));
+    bed.link = Link::start(bed.rig.fx.core.clone(), bed.direct.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    bed.link.on_live_text(Arc::new(move |block| lives.lock().unwrap().push(format!("{} {} live {:?}", block.connection_id, block.run_id, block.text))));
+    let (run, _) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    let heard = heard.lock().unwrap().clone();
+    let live = |text: &str| format!("{} {} live {text:?}", run.connection_id, run.id);
+    let lives: Vec<&String> = heard.iter().filter(|line| line.contains(" live ")).collect();
+    assert_eq!(lives, [&live("Looking at "), &live("Looking at the cart. "), &live(""), &live("All "), &live("")], "the block so far, then its end; a turn's end drops what streamed");
+    // Nothing changed for the page between the pieces, and the end comes before the block's row changes the run.
+    let at = heard.iter().position(|line| *line == live("Looking at the cart. ")).unwrap();
+    assert_eq!(heard[at + 1..at + 3], [live(""), "changed".to_owned()]);
+    let rows = bed.rows(&run).await;
+    assert!(rows.contains(&("update".into(), "Looking at the cart.".into())), "{rows:?}");
+    assert!(!rows.iter().any(|(_, text)| text == "Looking at" || text == "All"), "a piece is no row: {rows:?}");
+    bed.end().await;
+}
+
 const ASKS: &str = r#"{"capabilities": {"tool_call_limit_ms": 600000}}
 {"prompt": null}
 {"call": {"name": "ask", "input": {"question": "Which colour should the button be?"}}}

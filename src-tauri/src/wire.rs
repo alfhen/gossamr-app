@@ -53,6 +53,9 @@ pub enum Topic {
     Connections,
     /// Whether the harness runs changed; the page re-reads `harness_status`. Its connection id is empty.
     Harness,
+    /// A working run's streamed text, as far as it has come; the payload carries it as `live`. Never stored: the row of
+    /// its block replaces it, and an empty text says the block ended.
+    LiveText,
 }
 
 #[derive(Clone, Serialize)]
@@ -62,6 +65,15 @@ struct Changed<'a> {
     connection_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     strays: Option<&'a [Stray]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live: Option<Live<'a>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Live<'a> {
+    run_id: &'a str,
+    text: &'a str,
 }
 
 fn send<S: Serialize + Clone>(app: &AppHandle, event: Event, payload: S) {
@@ -69,11 +81,15 @@ fn send<S: Serialize + Clone>(app: &AppHandle, event: Event, payload: S) {
 }
 
 pub fn changed(app: &AppHandle, topic: Topic, connection_id: &str) {
-    send(app, Event::Changed, Changed { topic, connection_id, strays: None });
+    send(app, Event::Changed, Changed { topic, connection_id, strays: None, live: None });
 }
 
 pub fn assigned_elsewhere(app: &AppHandle, connection_id: &str, strays: &[Stray]) {
-    send(app, Event::Changed, Changed { topic: Topic::AssignedElsewhere, connection_id, strays: Some(strays) });
+    send(app, Event::Changed, Changed { topic: Topic::AssignedElsewhere, connection_id, strays: Some(strays), live: None });
+}
+
+pub fn live_text(app: &AppHandle, connection_id: &str, run_id: &str, text: &str) {
+    send(app, Event::Changed, Changed { topic: Topic::LiveText, connection_id, strays: None, live: Some(Live { run_id, text }) });
 }
 
 pub fn pip<S: Serialize + Clone>(app: &AppHandle, payload: S) {
@@ -122,19 +138,26 @@ mod tests {
 
     #[test]
     fn a_changed_event_names_its_topic_and_connection() {
-        let json = serde_json::to_value(Changed { topic: Topic::DevLinks, connection_id: "jira:1", strays: None }).unwrap();
+        let json = serde_json::to_value(Changed { topic: Topic::DevLinks, connection_id: "jira:1", strays: None, live: None }).unwrap();
         assert_eq!(json, serde_json::json!({ "topic": "devLinks", "connectionId": "jira:1" }));
     }
 
     #[test]
     fn the_harness_is_a_topic_of_the_changed_event() {
-        let json = serde_json::to_value(Changed { topic: Topic::Harness, connection_id: "", strays: None }).unwrap();
+        let json = serde_json::to_value(Changed { topic: Topic::Harness, connection_id: "", strays: None, live: None }).unwrap();
         assert_eq!(json, serde_json::json!({ "topic": "harness", "connectionId": "" }));
     }
 
     #[test]
+    fn a_runs_streamed_text_is_a_topic_of_the_changed_event_that_carries_it() {
+        let live = Changed { topic: Topic::LiveText, connection_id: "jira:1", strays: None, live: Some(Live { run_id: "r1", text: "Reading the " }) };
+        let json = serde_json::to_value(live).unwrap();
+        assert_eq!(json, serde_json::json!({ "topic": "liveText", "connectionId": "jira:1", "live": { "runId": "r1", "text": "Reading the " } }));
+    }
+
+    #[test]
     fn a_connections_change_is_a_topic_of_the_changed_event() {
-        let json = serde_json::to_value(Changed { topic: Topic::Connections, connection_id: "github:ann", strays: None }).unwrap();
+        let json = serde_json::to_value(Changed { topic: Topic::Connections, connection_id: "github:ann", strays: None, live: None }).unwrap();
         assert_eq!(json, serde_json::json!({ "topic": "connections", "connectionId": "github:ann" }));
     }
 }

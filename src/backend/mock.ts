@@ -30,6 +30,7 @@ import type {
   Run,
   RunQuery,
   RunsChanged,
+  RunText,
   AgentSettings,
   HarnessAction,
   ModelChoice,
@@ -738,6 +739,10 @@ export class MockBackend implements Backend {
 
   onRunsChanged(listener: (c: RunsChanged) => void) {
     return this.runs.onChanged(listener);
+  }
+
+  onRunText(listener: (live: RunText) => void) {
+    return this.runs.onText(listener);
   }
 
   onOpenRun(listener: (runId: string) => void) {

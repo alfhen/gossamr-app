@@ -1,5 +1,5 @@
 import { denyOnlyWhy } from "../workspace/permissionLogic";
-import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState, RunText } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -578,6 +578,11 @@ const missing = (): never => {
 export class MockRuns {
   private runs: Run[];
   private listeners = new Set<(c: RunsChanged) => void>();
+  private textListeners = new Set<(live: RunText) => void>();
+  /** Each working run's block as it streams. */
+  private streams = new Map<string, string>();
+  /** The blocks each run said whole, oldest first: rows of its timeline. */
+  private said = new Map<string, string[]>();
   private openListeners = new Set<(runId: string) => void>();
   private seq = 0;
   private tick = 0;
@@ -709,6 +714,35 @@ export class MockRuns {
   onChanged(listener: (c: RunsChanged) => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
+  }
+
+  onText(listener: (live: RunText) => void) {
+    this.textListeners.add(listener);
+    return () => void this.textListeners.delete(listener);
+  }
+
+  private sendText(live: RunText) {
+    this.textListeners.forEach((l) => l(live));
+  }
+
+  /** A working run's agent streams `piece` of its block, as the harness sends one: the page hears the block so far. */
+  stream(id: string, piece: string) {
+    if (this.get(id)?.state !== "working") throw new Error("only a working run streams text");
+    const text = (this.streams.get(id) ?? "") + piece;
+    this.streams.set(id, text);
+    this.sendText({ runId: id, text });
+  }
+
+  /**
+   * The block ends with its whole `text`, as a driver ends one: the page hears that the block ended, then that the run
+   * changed, and reads its row in place of what streamed.
+   */
+  say(id: string, text: string) {
+    if (this.streams.delete(id)) this.sendText({ runId: id, text: "" });
+    this.said.set(id, [...(this.said.get(id) ?? []), text]);
+    const line = text.split("\n").map((l) => l.trim()).find((l) => l) ?? null;
+    this.update(id, { lastDetail: line, lastProgressAt: this.now() });
+    this.changed();
   }
 
   onOpen(listener: (runId: string) => void) {
@@ -921,6 +955,8 @@ export class MockRuns {
     // A session that ended closed whatever it was asking.
     if (TERMINAL.includes(next.state)) delete next.permissions;
     this.runs = this.runs.map((r) => (r.id === id ? next : r));
+    // Its turn ended, or it waits on you: what streamed of a block it never finished goes.
+    if (next.state !== "working" && this.streams.delete(id)) this.sendText({ runId: id, text: "" });
     return next;
   }
 
@@ -1453,6 +1489,7 @@ export class MockRuns {
     if (run.state === "done") lines.push(["done", "Wrote up what it found", run.result]);
     if (run.state === "stopped") lines.push(["stop", "Stopped", null]);
     for (const f of this.followUps.get(id) ?? []) lines.splice(lines.length - (run.state === "done" ? 1 : 0), 0, ["follow_up", f.text, f.detail]);
+    for (const text of this.said.get(id) ?? []) lines.splice(lines.length - (run.state === "done" ? 1 : 0), 0, ["update", text, null]);
     const events = lines.map(([kind, text, detail], i): RunEvent => ({ runId: id, seq: i + 1, at: at(i * 2), kind, text, detail }));
     const answers = (this.answeredAt.get(id) ?? []).map((when): RunEvent => ({ runId: id, seq: 0, at: when, kind: "answered", text: "You answered", detail: null }));
     if (!answers.length) return events;

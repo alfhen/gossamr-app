@@ -16,7 +16,11 @@ export function offsetText(at: string, first: string): string {
   return minutes < 60 ? `+${minutes}m` : `+${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-export function RunTimeline({ events, live }: { events: readonly RunEvent[] | null; live: string | null }) {
+/**
+ * What the agent did, oldest first. While it works, the last row says what it is doing: the block it is writing, as it
+ * streams (`streamed`), or else its last update (`live`).
+ */
+export function RunTimeline({ events, live, streamed = null }: { events: readonly RunEvent[] | null; live: string | null; streamed?: string | null }) {
   const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
   if (events === null) {
     return (
@@ -25,7 +29,7 @@ export function RunTimeline({ events, live }: { events: readonly RunEvent[] | nu
       </p>
     );
   }
-  if (events.length === 0 && !live) return <p className="m-0 text-ws-ink3">Nothing recorded yet.</p>;
+  if (events.length === 0 && !live && !streamed) return <p className="m-0 text-ws-ink3">Nothing recorded yet.</p>;
   const toggle = (seq: number) =>
     setOpen((was) => {
       const next = new Set(was);
@@ -61,13 +65,24 @@ export function RunTimeline({ events, live }: { events: readonly RunEvent[] | nu
           </li>
         );
       })}
-      {live && (
-        <li className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
+      {streamed ? (
+        <li data-streamed="" className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
           <span aria-hidden className="grid size-[22px] place-items-center rounded-full bg-ws-accent-soft text-ws-accent">
             <Icon name="retry" className="size-3 animate-spin motion-reduce:animate-none" />
           </span>
-          <div className="min-w-0 text-ws-ink2">{live}…</div>
+          <div aria-live="off" className="min-w-0 whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">
+            {streamed}
+          </div>
         </li>
+      ) : (
+        live && (
+          <li data-progress="" className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
+            <span aria-hidden className="grid size-[22px] place-items-center rounded-full bg-ws-accent-soft text-ws-accent">
+              <Icon name="retry" className="size-3 animate-spin motion-reduce:animate-none" />
+            </span>
+            <div className="min-w-0 text-ws-ink2">{live}…</div>
+          </li>
+        )
       )}
     </ol>
   );
