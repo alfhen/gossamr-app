@@ -18,6 +18,7 @@ pub mod env;
 pub mod error;
 pub mod event;
 pub mod fresh;
+pub mod gemini;
 pub mod mcp;
 pub mod mock;
 pub mod process;
@@ -47,13 +48,14 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Which build this is; `build.rs` says how it is chosen.
 pub const BUILD_ID: &str = env!("HARNESS_BUILD_ID");
 
-/// The providers `harness serve` offers: the mock when a script is given, and Claude and Codex, whose CLIs each open
-/// looks for in `places`.
+/// The providers `harness serve` offers: the mock when a script is given, and Claude, Codex and Gemini, whose CLIs each
+/// open looks for in `places`.
 pub fn serve_drivers(script: Option<mock::Script>, places: &binary::CliPlaces) -> Vec<(String, std::sync::Arc<dyn driver::Driver>)> {
     let mock = script.map(|script| ("mock".to_owned(), std::sync::Arc::new(mock::Mock::new(script)) as std::sync::Arc<dyn driver::Driver>));
     let claude = ("claude".to_owned(), std::sync::Arc::new(claude::driver::ClaudeDriver::found(places.clone())) as std::sync::Arc<dyn driver::Driver>);
     let codex = ("codex".to_owned(), std::sync::Arc::new(codex::driver::CodexDriver::found(places.clone())) as std::sync::Arc<dyn driver::Driver>);
-    mock.into_iter().chain([claude, codex]).collect()
+    let gemini = ("gemini".to_owned(), std::sync::Arc::new(gemini::driver::GeminiDriver::found(places.clone())) as std::sync::Arc<dyn driver::Driver>);
+    mock.into_iter().chain([claude, codex, gemini]).collect()
 }
 
 /// The runtime `harness serve` runs on. A driver's open starts a process and can block, so it takes several threads:
@@ -162,12 +164,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serve_offers_the_mock_with_a_script_and_claude_and_codex_always() {
+    fn serve_offers_the_mock_with_a_script_and_claude_codex_and_gemini_always() {
         let names = |drivers: Vec<(String, std::sync::Arc<dyn driver::Driver>)>| drivers.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
         let places = binary::CliPlaces::none();
-        assert_eq!(names(serve_drivers(None, &places)), ["claude", "codex"], "found at open, so one on the shell's PATH counts");
+        assert_eq!(names(serve_drivers(None, &places)), ["claude", "codex", "gemini"], "found at open, so one on the shell's PATH counts");
         let script = mock::Script::parse("{\"prompt\": null}\n{\"end\": \"done\"}").unwrap();
-        assert_eq!(names(serve_drivers(Some(script), &places)), ["mock", "claude", "codex"]);
+        assert_eq!(names(serve_drivers(Some(script), &places)), ["mock", "claude", "codex", "gemini"]);
     }
 
     #[test]

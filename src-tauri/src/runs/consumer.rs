@@ -309,7 +309,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 run.ended_at.get_or_insert(now);
             }
         }
-        Body::Withheld { .. } => {}
+        // Only the Gemini driver sends it, and Gemini runs reach the app with H13.
+        Body::Background { .. } | Body::Withheld { .. } => {}
     }
     waits(run, follow);
     if let Some(text) = announce_permissions(run) {
