@@ -173,12 +173,32 @@ pub fn run(o: &Common) {
     if o.keep_open > 0.0 {
         // While idle: what the agent sends unprompted, and its process tree every 5 s.
         let mut last = std::time::Instant::now();
+        // H8: a prompt sent while the agent writes a message it started by itself, and what it does with it.
+        let mut late: Option<(String, Option<i64>, Turn)> = o.prompt_when_unprompted.clone().map(|p| (p, None, Turn::new(o.prompt.len(), o)));
         rpc.pump(Duration::from_secs_f64(o.keep_open), &mut |r, m| {
             if last.elapsed() >= Duration::from_secs(5) {
                 last = std::time::Instant::now();
                 r.a.note_processes("idle");
             }
-            side(r, m, o, None);
+            let chunk = m.is_some_and(|m| m["method"] == "session/update" && m["params"]["update"]["sessionUpdate"] == "agent_message_chunk");
+            match &mut late {
+                Some((text, sent @ None, _)) if chunk => {
+                    r.a.t.note("prompt_during_unprompted", json!({ "after": "agent_message_chunk" }));
+                    *sent = Some(r.request("session/prompt", json!({ "sessionId": sid, "prompt": [{ "type": "text", "text": text }] })));
+                    r.a.note_processes("prompt_during_unprompted");
+                }
+                Some((_, Some(id), _)) if m.is_some_and(|m| m.get("method").is_none() && m["id"] == *id) => {
+                    r.a.t.note("turn_end", json!({ "turn": o.prompt.len(), "answer": m.cloned(), "during_unprompted": true }));
+                    r.a.note_processes("after_turn");
+                    late = None;
+                    return false;
+                }
+                _ => {}
+            }
+            match &mut late {
+                Some((_, Some(_), turn)) => side(r, m, o, Some((turn, &mut Vec::new()))),
+                _ => side(r, m, o, None),
+            }
             false
         });
     }

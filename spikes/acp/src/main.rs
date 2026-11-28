@@ -111,6 +111,9 @@ pub struct Common {
     /// Seconds to keep stdin open after the last turn, to see what the agent does while idle.
     #[arg(long, default_value_t = 0.0)]
     pub keep_open: f64,
+    /// ACP, with `--keep-open`: send this prompt as soon as the agent starts a message by itself after the last turn.
+    #[arg(long)]
+    pub prompt_when_unprompted: Option<String>,
     /// Seconds to wait for the agent to exit after stdin is closed, before it is killed.
     #[arg(long, default_value_t = 20.0)]
     pub exit_wait: f64,

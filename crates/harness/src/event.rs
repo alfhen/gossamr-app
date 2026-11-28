@@ -73,6 +73,9 @@ pub enum Body {
         #[serde(default)]
         by: ClosedBy,
     },
+    /// A command the agent started runs on with no prompted turn running (`running`), or the last such one ended. While
+    /// one runs the session is busy after its turn ended, so its work is not finished.
+    Background { running: bool },
     /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
     /// at clean-up or by age, one too large to keep even when cut, or one of a type this build does not know (so a later step can add an event without a
     /// migration). `of` is the event's type, and `kept` its fields that are not private (ids, kinds, decisions, how
@@ -122,7 +125,7 @@ pub enum ClosedBy {
 /// driver puts those in `input`.
 pub const KEPT_FIELDS: &[&str] = &[
     "provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error", "input_tokens", "output_tokens", "cache_read_tokens",
-    "cache_creation_tokens", "cost_usd", "by",
+    "cache_creation_tokens", "cost_usd", "by", "running",
 ];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
@@ -302,7 +305,8 @@ mod tests {
             Body::Notice { .. } => 18,
             Body::HandedOver => 19,
             Body::Closed { .. } => 20,
-            Body::Withheld { .. } => 21,
+            Body::Background { .. } => 21,
+            Body::Withheld { .. } => 22,
         }
     }
 
@@ -331,6 +335,7 @@ mod tests {
             Body::Notice { text: "t".into() },
             Body::HandedOver,
             Body::Closed { by: ClosedBy::Stop },
+            Body::Background { running: true },
         ]
     }
 

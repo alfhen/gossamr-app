@@ -1,0 +1,18 @@
+started
+prompted 56
+turn_started
+tool_call run_command 0 {CommandLine,NotificationTimeoutSeconds,WaitMsBeforeAsync,toolSummary} 4
+permission command run_command {CommandLine,NotificationTimeoutSeconds,WaitMsBeforeAsync,toolSummary} 4
+answered allow
+text 111
+turn_ended done
+tool_result 0 ok {exit_code,output} 2
+turn_started
+text 37
+turn_ended done
+prompted 50
+turn_started
+text 105
+text 7
+turn_ended done
+closed
