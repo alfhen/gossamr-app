@@ -14,9 +14,10 @@
 //! the session is busy after its turn ended (`background`). A message agy starts by itself opens a turn of its own, which
 //! has no end marker: it ends once agy has said nothing for `QUIET`, no descendant runs, and no tool call of it is open
 //! short of agy's own cut and a margin. Each turn's text is masked on its own, so a secret the pause splits shows its
-//! tail unmasked, as in H2's replay; only the secrets the harness knows are masked wherever they fall. A prompt sent
-//! during such a message waits for it, as agy holds it (H0, `r8-prompt-during-unprompted`): the rest of the message and
-//! agy's answer go in the prompted turn.
+//! tail unmasked, as in H2's replay; only the secrets the harness knows are masked wherever they fall. The session sends
+//! a prompt only once such a turn has ended, so the session never has two turns open. agy, if still in its message,
+//! finishes it and then answers (H0, `r8-prompt-during-unprompted`): what it says after the prompt goes in the prompted
+//! turn, which ends with that prompt's `end_turn`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::unix::process::ExitStatusExt;
@@ -374,7 +375,6 @@ struct Turn {
     /// Tool calls with no `completed` or `failed` update that are not commands, and when each began: an MCP call held
     /// on the session's own endpoint among them. A command counts through agy's descendants instead.
     open_calls: HashMap<String, Instant>,
-    open_commands: HashSet<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -524,11 +524,6 @@ impl Acp {
     }
 
     fn prompt(&mut self, text: String) {
-        if self.ready && self.turn.as_ref().is_some_and(|turn| turn.request.is_none() && turn.open_calls.is_empty() && turn.open_commands.is_empty()) {
-            // agy holds a prompt sent while it writes a message by itself, and answers it after: that message ends here.
-            self.held.push_front(text);
-            return self.end(Body::TurnEnded { how: TurnEnd::Done });
-        }
         let Some(session) = self.session.clone().filter(|_| self.ready && self.turn.is_none()) else {
             self.held.push_back(text);
             return;
@@ -630,10 +625,8 @@ impl Acp {
                 let id = field(update, "toolCallId", "tool_call_id").as_str().unwrap_or_default().to_owned();
                 self.emit(Body::ToolCall { id: id.clone(), name: tool_name(update), input: tool_input(update) });
                 self.calls.insert(id.clone());
-                match self.turn.as_mut() {
-                    Some(turn) if update["kind"] == "execute" => drop(turn.open_commands.insert(id)),
-                    Some(turn) => drop(turn.open_calls.insert(id, Instant::now())),
-                    None => {}
+                if let Some(turn) = self.turn.as_mut().filter(|_| update["kind"] != "execute") {
+                    turn.open_calls.insert(id, Instant::now());
                 }
                 self.look = true;
                 self.finished(update);
@@ -651,7 +644,6 @@ impl Acp {
         let id = field(update, "toolCallId", "tool_call_id").as_str().unwrap_or_default().to_owned();
         if let Some(turn) = &mut self.turn {
             turn.open_calls.remove(&id);
-            turn.open_commands.remove(&id);
         }
         if !self.calls.remove(&id) {
             return;
@@ -660,9 +652,6 @@ impl Acp {
         let output = [field(update, "rawOutput", "raw_output"), &update["content"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
         self.emit(Body::ToolResult { id, output, error: status == "failed" });
         self.look = true;
-        if !self.held.is_empty() && self.turn.as_ref().is_some_and(|turn| turn.request.is_none() && turn.open_calls.is_empty() && turn.open_commands.is_empty()) {
-            self.end(Body::TurnEnded { how: TurnEnd::Done });
-        }
     }
 
     fn answered(&mut self, request: Option<u64>, asked: Option<Asked>, line: &Value) {

@@ -37,8 +37,8 @@
 //! calls are no own tool of the driver's; a recording written for a test names the driver's endpoint `<endpoint>`,
 //! which the replay replaces with the server name the driver gave. `WIRE_REPLAY_PACE` (a factor, 1 for the recorded
 //! pace) writes each agent line no sooner than its recorded `ms` times the factor after the start. A `driver` note
-//! `spawn_child` with `detail.ms` starts a `sleep` of that long as the replay's own child, which writes its pid to
-//! `child.pid`, as agy's command would be its child.
+//! `spawn_child` with `detail.ms` starts a `sleep` of that long as the replay's own child, in a group of its own, and
+//! writes its pid to `child.pid`, as agy's command would be its child.
 //!
 //! When a line may come: a prompt follows the `result` before it, and an interrupt the last agent line before it that is
 //! not a `stream_event`. Before the replay writes such a line it waits until stdin has been quiet for
@@ -687,7 +687,11 @@ impl Replay {
     }
 
     fn spawn_child(&mut self, ms: u64) -> Result<(), String> {
-        let mut child = std::process::Command::new("/bin/sleep").arg(format!("{}", ms as f64 / 1000.0)).spawn().map_err(|e| format!("cannot start the child: {e}"))?;
+        use std::os::unix::process::CommandExt;
+        // In a group of its own, so only the driver's noted tree leads to it, not the agent's group.
+        let mut command = std::process::Command::new("/bin/sleep");
+        command.arg(format!("{}", ms as f64 / 1000.0)).process_group(0);
+        let mut child = command.spawn().map_err(|e| format!("cannot start the child: {e}"))?;
         std::fs::write(self.out.join("child.pid"), child.id().to_string()).map_err(|e| format!("cannot write child.pid: {e}"))?;
         std::thread::spawn(move || child.wait());
         Ok(())

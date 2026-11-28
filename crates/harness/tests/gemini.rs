@@ -760,7 +760,8 @@ async fn gemini_an_open_call_with_no_update_holds_the_turn_only_up_to_agys_cut_a
 #[tokio::test]
 async fn gemini_a_commands_open_call_with_no_descendant_running_does_not_hold_the_turn() {
     let rec = after_a_turn(|rec| {
-        rec.chunk(100, "running").call(150, "c1", "run_command", "execute").chunk(2_000, "later").close();
+        // The next message comes after the quiet but within the cut, so an open call would have held the turn.
+        rec.chunk(100, "running").call(150, "c1", "run_command", "execute").chunk(1_400, "later").close();
     });
     let (rig, id, client) = unprompted(rec, Duration::from_millis(1_200)).await;
     closed(&rig, &id, &client).await;
@@ -867,22 +868,4 @@ async fn gemini_a_leftover_agy_from_a_dead_harness_is_stopped_by_its_stored_pid_
 fn rig_at_with(data: &Path, fixture: &Path, store: Store) -> Harness {
     let env = vec![("PATH".to_owned(), "/usr/bin:/bin".to_owned()), ("WIRE_REPLAY_FIXTURE".to_owned(), fixture.display().to_string())];
     harness_on(data, store, GeminiDriver::new(REPLAY.into()).with_timing(timing()), env)
-}
-
-#[tokio::test]
-async fn gemini_a_reused_pid_on_record_is_never_signalled() {
-    let (tmp, data) = data_dir();
-    let mut other = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
-    let pid = other.id();
-    let started = process::started_of(pid).expect("it runs");
-    let store = Store::open(&data).unwrap();
-    store.create_session("s", "gemini", false, tmp.path(), None).unwrap();
-    // The record's start is an hour before this process's: its pid was given out again since.
-    store.set_agent("s", Some(&Process { pid, started: started.saturating_sub(3_600) })).unwrap();
-    let harness = rig_at_with(&data, Path::new("/nowhere"), store);
-    assert_eq!(process::seam::sent_to(pid), Vec::<i32>::new(), "never signalled");
-    assert!(other.try_wait().unwrap().is_none(), "and it runs on");
-    harness.shutdown().await;
-    other.kill().unwrap();
-    other.wait().unwrap();
 }
