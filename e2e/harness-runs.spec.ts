@@ -4,7 +4,7 @@ import { advanceRuns, agentsHome, expandNeedsYou, expectToast, mockAnswerTries, 
 /** Said when an answer goes to a run handed over to Terminal; `HANDED_OVER_ASK` in src/types.ts. */
 const HANDED_OVER = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
 /** Why Clean up leaves a run Terminal works in; `HANDED_OVER_CLEANUP` in src/types.ts. */
-const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Quit it there and press Resume here, or remove the worktree yourself once you are done there, then Clean up.";
 
 const card = (page: Page, key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
 const runOf = async (page: Page, key: string) => (await mockRuns(page)).find((r) => r.key === key)!;

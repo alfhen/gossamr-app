@@ -267,6 +267,21 @@ These are the results of the step 0 spikes for `docs/simplification-proposal.md`
 - With "loading it with ToolSearch first if it is not loaded", the same resume called `report`.
 - So the reminder sent ahead of every resume names Gossamr's four tools and says to load them with ToolSearch.
 
+## A session reopened in Terminal (H14, Claude Code 2.1.331, scratch config, signed out)
+
+Take over in Terminal shows `claude --resume <id>` in the run's worktree, and Resume here must not take the session back while that `claude` still runs. Checked in a scratch `CLAUDE_CONFIG_DIR`, never a login folder: a `--bg` session there, stopped, then `claude --resume <its session id>` started in a pseudo-terminal (`script -q`).
+
+- `ps -axo pid=,args=` shows the interactive process with `--resume <session id>` in its arguments, as typed.
+- The installed `claude` is a link to a file named by its version (`~/.local/share/claude/versions/2.1.331`). The process's own path (`proc_pidpath`) ends in that version; its first argument, the name it was started as, ends in `claude`.
+- It kept the folder it started in as its working folder: still there 53 minutes later. That was idle, at the start screen; a turn that runs tools was not seen.
+- `claude agents --json --all` did not list it at all, 12 s after it started: only the stopped `background` row, with no pid. Signed out, the interactive session sits at the start screen and does not register. A signed-in one is listed as `kind:"interactive"` with `pid`, `cwd` and `sessionId` (the 2.1.286 fixture); that was not seen live here.
+- It writes `<config>/sessions/<pid>.<digest>.key` while it runs. Gossamr does not read it.
+- Not seen: whether a signed-in `claude --resume <id>` keeps the same session id. That needs a signed-in folder.
+- It ignored EOF on its input and kept running; it ends on `/exit` or a signal.
+- For some milliseconds after any process starts, macOS reads neither its spawner's arguments nor its own (`KERN_PROCARGS2`), so a check in that window misses it.
+
+So a take back is refused while a process holds the session (`harness::process::holding`, in `resume_from`, under the start lock): one whose arguments hold the session's provider id, or one started as a provider's program (by its first argument, its path, the script an interpreter such as `node` runs, as an npm install of Claude Code is, or, under an interpreter, an argument inside the provider's package, `@anthropic-ai/claude-code/`, as a pnpm or cmd-shim `claude` runs `node …/cli.js`) whose working folder is inside the session's. `claude --continue` in the worktree carries no id, so only that second test finds it. A shell left in the folder is no holder, nor is an agent of the harness's own. The first prompt after a take back checks again, with the new agent counted as the harness's own, since Terminal may start its `claude` seconds after it was asked to; a holder found then has the prompt dropped, unsent. The app also waits 10 s after its own Open in Terminal before it takes a run back. The app also asks Claude's listing on the run's login for an interactive row with the session's id, which finds a `/resume` started from another folder when Claude lists it.
+
 ## Cleanup check (PR 12a)
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.

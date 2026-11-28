@@ -583,6 +583,8 @@ export interface Run {
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
+  /** Resume here took it back from Terminal, and it waits at rest for your message (`runsAnswer` sends it). */
+  resumedHere?: boolean;
   /** Its agent's permission requests that are still open, oldest first. Each is answered once, with `runsAnswerPermission`. */
   permissions?: PermissionRequest[];
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
@@ -645,8 +647,17 @@ export interface Run {
 /** Why a message to a run handed over to Terminal waits on you, as `HANDED_OVER_ASK` in `runs/message.rs`. */
 export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
 
+/** A run Resume here took back from Terminal, as `RESUMED_HERE` in `runs/consumer.rs`. */
+export const RESUMED_HERE = "Resumed here. Message the agent to go on.";
+
+/** Why the resume command waits while the harness's agent goes, as `AGENT_STOPPING` in `runs/on_harness.rs`. */
+export const AGENT_STOPPING = "Its agent is still stopping.";
+
+/** Why Resume here and the resume command refuse a run, as `NOT_HANDED_OVER` in `runs/on_harness.rs`. */
+export const NOT_HANDED_OVER = "It isn't handed over to Terminal.";
+
 /** Why Clean up leaves a run handed over to Terminal while its worktree is there, as `HANDED_OVER_CLEANUP` in `runs/cleanup.rs`. */
-export const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+export const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Quit it there and press Resume here, or remove the worktree yourself once you are done there, then Clean up.";
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
 export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";

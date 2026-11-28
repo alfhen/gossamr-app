@@ -133,6 +133,8 @@ export interface MockHandle {
   permissionAnswers(): { run: string; request: string; decision: "allow" | "deny" }[];
   /** The command Terminal was opened on for each run in `attached`. */
   attachCommands(): string[];
+  /** Pip's message to run `id`, as `message_agent`: how it went, or the sentence it was refused with. */
+  messageAgent(id: string, text: string): string;
   /** How many times Reveal in Finder was pressed for the work folder. */
   workFolderReveals(): number;
   /** The commands Terminal was opened on from a connection's detail, oldest first. */
@@ -197,7 +199,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; withdrawPermission(id: string, request: string): unknown; readonly permissionAnswers: readonly { run: string; request: string; decision: "allow" | "deny" }[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; withdrawPermission(id: string, request: string): unknown; readonly permissionAnswers: readonly { run: string; request: string; decision: "allow" | "deny" }[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number; messageAgent(id: string, text: string): string };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
@@ -247,6 +249,13 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     withdrawPermission: (id, request) => void runs.withdrawPermission(id, request),
     permissionAnswers: () => [...runs.permissionAnswers],
     attachCommands: () => [...runs.attachCommands],
+    messageAgent: (id, text) => {
+      try {
+        return runs.messageAgent(id, text);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
     workFolderReveals: () => runs.workFolderReveals,
     connectionTerminals: () => [...(terminals ?? [])],
     providerReveals: () => [...(revealedFolders ?? [])],

@@ -176,8 +176,14 @@ export interface Backend {
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */
   runsStopAll(): Promise<{ stopped: number; failed: number; waiting: number }>;
-  /** Opens Terminal attached to the run's session. */
+  /** Opens Terminal attached to the run's session. A run on the harness is handed over to it. */
   runsAttach(id: string): Promise<void>;
+  /** Take over in Terminal, from a permission request Gossamr can only deny: hands the run over, cutting the turn that waits on it. */
+  runsTakeOver(id: string): Promise<void>;
+  /** The provider's own resume of a run handed over to Terminal, as one line to type there. Rejects with `NOT_HANDED_OVER` for any other run. */
+  runsResumeCommand(id: string): Promise<string>;
+  /** Resume here: you took a run handed over to Terminal back, so the harness takes its session back and starts it again. */
+  runsTakeBack(id: string): Promise<Run>;
   /** Opens Terminal in the run's clone running `claude`, so the person can accept Claude's trust question. Rejects unless the run failed because its folder isn't trusted. */
   runsTrustFolder(id: string): Promise<void>;
   /** Opens Terminal in the run's clone running claude in the refused permission mode, so the person can accept it once. Rejects unless the run failed because `--bg` refused that mode. */

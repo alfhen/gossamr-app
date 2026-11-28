@@ -32,7 +32,7 @@ pub use proposal::{
     Revised, Revision, StateKind, Verdict, Write,
 };
 pub use run::{
-    SessionFollow,
+    SessionFollow, BeforeResume,
     agent_allow_rules, has_markers, render_prompt, render_prompt_from, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, LegacySpec, PermissionRequest, Role, Run, RunEvent, RefusedMode, RunFailure, RunProcess, RunQuery, RunSpec, RunState, Start, worktree_in,
     PIP_BRIEF_LIMIT, ROLE_LIMIT, GUARD, GUARD_VERSION, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, AGENT_TOOLS, ASK_TOOL, READ_TICKET_TOOL, READ_WORKSTREAM_TOOL, REPORT_TOOL, REPORT_TOOL_VERSION, PLAN_LIMIT, TICKET_BLOCK_LIMIT, TITLE_LIMIT,
 };

@@ -58,7 +58,7 @@ export function PermissionItem({ run, request, label, size, where, index = 0 }: 
   };
   return (
     <div ref={root} onPointerEnter={note} onPointerDown={note} onPointerLeave={leave}>
-      <PermissionItemView name={name} ordinal={requestOrdinal(run, request.id)} request={request} answering={answering ?? null} held={held} unread={!seen} tall={tall} bands={bands} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
+      <PermissionItemView name={name} ordinal={requestOrdinal(run, request.id)} request={request} answering={answering ?? null} held={held} unread={!seen} tall={tall} bands={bands} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} onTakeOver={run.harnessSession ? () => void useRuns.getState().takeOver(run.id) : undefined} />
     </div>
   );
 }
@@ -308,7 +308,7 @@ const UNREAD = "Scroll through the whole request to allow it.";
 /** How long after a click a second one at the same spot, on what moved under it, is ignored. */
 export const REPEAT_MS = 1000;
 
-export function PermissionItemView({ name, ordinal = null, request, answering, held = null, unread = false, tall = false, bands = { area: 0, step: 0 }, refused = null, hint = null, size = "md", onAnswer, onMissed }: { name: string; ordinal?: string | null; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; tall?: boolean; bands?: Bands; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void }) {
+export function PermissionItemView({ name, ordinal = null, request, answering, held = null, unread = false, tall = false, bands = { area: 0, step: 0 }, refused = null, hint = null, size = "md", onAnswer, onMissed, onTakeOver }: { name: string; ordinal?: string | null; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; tall?: boolean; bands?: Bands; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void; onTakeOver?(): void }) {
   const why = denyOnlyWhy(request);
   const off = !!answering || !!held;
   const title = held ?? undefined;
@@ -360,6 +360,12 @@ export function PermissionItemView({ name, ordinal = null, request, answering, h
           <AnswerButton size={size} off={off} title={title} onAnswer={(el, byKey) => onAnswer("deny", el, byKey)}>
             {answering === "deny" ? "Denying…" : "Deny"}
           </AnswerButton>
+          {/* The way out the reason names: the agent's own Claude in Terminal shows the request whole. */}
+          {why && onTakeOver && (
+            <AnswerButton size={size} off={off} title={title} onAnswer={() => onTakeOver()}>
+              Take over in Terminal
+            </AnswerButton>
+          )}
         </ButtonGroup>
       </div>
       {/* Below the buttons, so a line that comes and goes never moves them. */}

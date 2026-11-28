@@ -102,6 +102,27 @@ fn login_lines(login: Option<&ProviderEnv>) -> Result<String> {
     Ok(format!("{unset}export {name}='{folder}'\n"))
 }
 
+/// What `write_attach_file` runs, as one line to type in Terminal: each word quoted for the shell.
+pub fn resume_line(login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String]) -> Result<String> {
+    let text = |path: &Path| path.to_str().map(str::to_owned).ok_or_else(|| refuse(format!("{} isn't a path Terminal can be given", path.display())));
+    let mut steps = vec![format!("cd {}", super::shell::quote(&text(worktree)?))];
+    let mut command = String::new();
+    if let Some(login) = login.and_then(ProviderEnv::terminal_login) {
+        if !login.unset.is_empty() {
+            steps.push(format!("unset {}", login.unset.join(" ")));
+        }
+        let (name, folder) = login.export;
+        command.push_str(&format!("{name}={} ", super::shell::quote(&text(Path::new(folder))?)));
+    }
+    command.push_str(&super::shell::quote(&text(program)?));
+    for word in words {
+        command.push(' ');
+        command.push_str(&super::shell::quote(word));
+    }
+    steps.push(command);
+    Ok(steps.join(" && "))
+}
+
 fn digest_of(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
@@ -133,10 +154,65 @@ fn plain_words(words: &[String]) -> Result<String> {
 /// Writes `<dir>/<last word>-<digest>.command`: `cd` into the worktree, then the program with the backend's `words`
 /// that attach to the session. Nothing from a model or a ticket can be in it: the words are checked, and so are both paths.
 pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String]) -> Result<PathBuf> {
+    write_attach_guarded(dir, login, program, worktree, words, None)
+}
+
+/// One Open in Terminal's files for a run: `<run>.<attempt>.open` while its script has not claimed it, then
+/// `<run>.<attempt>.open.claimed.<pid>`, named by the process that `exec`s into `claude`, so a claim says who holds it.
+#[derive(Debug, Default)]
+pub struct Attempts {
+    pub open: Vec<PathBuf>,
+    pub claimed: Vec<(PathBuf, u32)>,
+}
+
+const CLAIMED: &str = ".claimed.";
+
+/// What attempts to open run `id`'s session in Terminal left in `dir`.
+pub fn attempts(dir: &Path, id: &str) -> Attempts {
+    let prefix = format!("{id}.");
+    let mut found = Attempts::default();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned).filter(|name| name.starts_with(&prefix)) else { continue };
+        match name.split_once(CLAIMED) {
+            Some((_, pid)) => {
+                if let Ok(pid) = pid.parse() {
+                    found.claimed.push((entry.path(), pid));
+                }
+            }
+            None if name.ends_with(".open") => found.open.push(entry.path()),
+            None => {}
+        }
+    }
+    found
+}
+
+/// A marker for a new attempt to open run `id` in Terminal, unlike any earlier one, so an old script can't claim it.
+pub fn new_marker(dir: &Path, id: &str) -> PathBuf {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|since| since.as_nanos()).unwrap_or_default();
+    dir.join(format!("{id}.{at}.open"))
+}
+
+/// What a take back says in a Terminal that had not yet started the session's `claude`.
+pub const TAKEN_BACK_HERE: &str = "Gossamr took this session back, so it isn't opened here.";
+
+/// `write_attach_file`, whose script first checks that `marker` still exists, and else exits with `TAKEN_BACK_HERE`:
+/// a take back removes it, so a Terminal whose shell was slow to start never resumes a session Gossamr took back.
+pub fn write_attach_guarded(dir: &Path, login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String], marker: Option<&Path>) -> Result<PathBuf> {
     let name = words.last().ok_or_else(|| refuse("that isn't a session"))?;
     let (program, worktree, words_text) = (quotable(program)?, quotable(worktree)?, plain_words(words)?);
     let login = login_lines(login)?;
-    write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
+    let guard = match marker {
+        // Claimed by renaming it to a name that holds this shell's pid, which `exec` keeps for `claude`: only one of this
+        // and a take back's removal can win, and the claim says who holds the session while it lives.
+        // In double quotes: the words hold an apostrophe, and no `$`, backquote or backslash.
+        Some(marker) => {
+            let marker = quotable(marker)?;
+            format!("mv -f '{marker}' '{marker}{CLAIMED}'\"$$\" 2>/dev/null || {{ echo \"{TAKEN_BACK_HERE}\"; exit 0; }}\n")
+        }
+        None => String::new(),
+    };
+    // Right before `exec`, so nothing between the check and `claude` can pause.
+    write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\n{guard}exec '{program}'{words_text}\n"))
 }
 
 impl Purpose {
@@ -390,9 +466,22 @@ impl RunService {
 
     /// Opens Terminal in the run's worktree with the backend's attach command for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
+        self.attach_as(run_id, false).await
+    }
+
+    /// Take over in Terminal, from a permission request Gossamr can only deny: `attach`, cutting the turn that waits
+    /// on it, so you can run it yourself there.
+    pub async fn take_over(&self, run_id: &str) -> Result<()> {
+        self.attach_as(run_id, true).await
+    }
+
+    async fn attach_as(&self, run_id: &str, take_over: bool) -> Result<()> {
         let run = self.load(run_id).await?;
-        if let Some(handed) = self.hand_over_on_harness(&run).await {
+        if let Some(handed) = self.hand_over_on_harness(&run, take_over).await {
             return handed;
+        }
+        if take_over {
+            return Err(refuse("Only a run on the harness can be taken over in Terminal."));
         }
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.observing_toolchain(&run).await?;

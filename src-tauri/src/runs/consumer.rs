@@ -18,6 +18,8 @@ const NEEDS_KEPT: usize = super::tracker::NEEDS_KEPT;
 
 pub const SLOT_WAIT: &str = "Waits for a free slot: the harness runs as many agents as it allows";
 pub const HANDED_OVER: &str = "Handed over to Terminal";
+/// A run Resume here took back from Terminal, as `RESUMED_HERE` in `src/types.ts`.
+pub const RESUMED_HERE: &str = "Resumed here. Message the agent to go on.";
 pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
@@ -56,9 +58,18 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
+            let taken_back = follow.taken_back;
             (follow.taken_back, follow.resuming) = (false, false);
             run.handed_over = false;
-            reopen(run);
+            // Resume here starts it with no prompt: it waits at rest for a message, which starts its turn.
+            follow.before_resume = Some(crate::domain::BeforeResume { state: run.state, ended_at: run.ended_at, error: run.error.clone(), failure: run.failure.clone() });
+            if taken_back && follow.answered.is_none() {
+                follow.resumed_here = true;
+                run.resumed_here = true;
+                run.last_detail = Some(RESUMED_HERE.into());
+            } else {
+                reopen(run);
+            }
             if follow.answered.is_some() {
                 run.last_detail = Some(ANSWER_WAITS.into());
             }
@@ -84,12 +95,17 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             rows.add("update", SLOT_WAIT, None);
         }
         // A message taken while the session was ending never reached the agent: say so where it is read.
+        Body::PromptsDropped if follow.held_in_terminal => follow.held_in_terminal = false,
         Body::PromptsDropped => {
             run.last_detail = Some(NOT_DELIVERED.into());
             rows.add("error", NOT_DELIVERED, None);
         }
         Body::TurnStarted => {
             follow.in_turn = true;
+            follow.before_resume = None;
+            follow.waits_for_terminal = false;
+            follow.resumed_here = false;
+            run.resumed_here = false;
             follow.cut = None;
             reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
@@ -261,17 +277,38 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.ended_at = Some(now);
             rows.add("error", &reason, None);
         }
+        // The first prompt after a take back, dropped while Terminal may still run the session: the reason is the run's
+        // line, and an answer it held was not given, so the question shows again.
+        // The harness's own sentence, not a dropped prompt that only quotes it.
+        Body::Notice { text } if !text.starts_with(harness::session::NOT_SENT) && (text.contains(harness::session::STILL_IN_TERMINAL) || text.contains(harness::session::WORKS_IN_WORKTREE) || text.contains(harness::session::OPENS_SESSION) || text == harness::session::CANNOT_CHECK_TERMINAL) => {
+            follow.held_in_terminal = true;
+            follow.answered = None;
+            // No turn began, so it reads as it did before the resume, and a message may try again.
+            if let Some(before) = follow.before_resume.clone().filter(|_| !follow.in_turn) {
+                run.state = before.state;
+                run.ended_at = before.ended_at;
+                run.error = before.error;
+                run.failure = before.failure;
+                follow.waits_for_terminal = true;
+            }
+            run.last_detail = Some(cut(&redact(&text), DETAIL_KEPT));
+            rows.add("error", &text, None);
+        }
         Body::Notice { text } => rows.add("update", &text, None),
         // What a turn used is no row of the timeline.
         Body::Usage { .. } => {}
         Body::HandedOver => {
             run.handed_over = true;
+            run.resumed_here = false;
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
         }
         // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
         // can be resumed, and its question stays until a `question_closed`.
         Body::Closed { by } => {
+            follow.resumed_here = false;
+            follow.waits_for_terminal = false;
+            run.resumed_here = false;
             // A message can no longer reach it, so the way out its failure names is the one that still works.
             if run.failure == Some(RunFailure::SigningNeedsYou) {
                 run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());

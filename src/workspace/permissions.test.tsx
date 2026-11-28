@@ -34,6 +34,14 @@ beforeEach(() => {
 });
 
 describe("a permission request's item", () => {
+  it("offers Take over in Terminal only on a request it can only deny, and only where the run can be handed over", () => {
+    const takeOver = (over: Partial<PermissionRequest>, offered: boolean) =>
+      buttons(renderToStaticMarkup(<PermissionItemView name="R1" request={request(over)} answering={null} onAnswer={vi.fn()} onTakeOver={offered ? vi.fn() : undefined} />)).map((b) => b.text);
+    expect(takeOver({ masked: true, denyOnly: true }, true)).toEqual(["Deny", "Take over in Terminal"]);
+    expect(takeOver({}, true)).toEqual(["Allow", "Deny"]);
+    expect(takeOver({ masked: true, denyOnly: true }, false)).toEqual(["Deny"]);
+  });
+
   it("shows the whole command, never cut, with Allow and Deny, neither of them the prominent style or focused by itself", () => {
     const html = item(request());
     expect(LONG_COMMAND.length).toBeGreaterThan(200);

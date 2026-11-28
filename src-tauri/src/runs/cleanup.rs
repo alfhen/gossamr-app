@@ -34,7 +34,7 @@ pub enum Cleanup {
 }
 
 /// Why Clean up leaves a run handed over to Terminal: Terminal resumes it in its worktree.
-pub const HANDED_OVER_CLEANUP: &str = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+pub const HANDED_OVER_CLEANUP: &str = "Handed over to Terminal, which works in its worktree. Quit it there and press Resume here, or remove the worktree yourself once you are done there, then Clean up.";
 
 /// A run handed over to Terminal whose worktree is still there: once you removed it, nothing resumes the session,
 /// and the harness cleans it up.
@@ -137,6 +137,11 @@ impl RunService {
         let mut run = self.load(&run.id).await?;
         if worktree_pending {
             run.worktree_removed_at = Some(Utc::now());
+            // Nothing opens its session in Terminal any more.
+            let left = super::control::attempts(&self.terminal_dir(), &run.id);
+            for file in left.open.into_iter().chain(left.claimed.into_iter().map(|(claim, _)| claim)) {
+                let _ = std::fs::remove_file(file);
+            }
         }
         run.sessions_left |= left;
         for earlier in run.earlier_sessions.iter_mut().filter(|e| left || gone.contains(&e.short_id)) {

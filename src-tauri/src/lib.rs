@@ -822,6 +822,9 @@ async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: Stat
 enum TerminalFor {
     /// The run's worktree, attached to its session.
     Session,
+    /// Take over in Terminal, from a permission request Gossamr can only deny: the session, with the turn that waits
+    /// on it cut.
+    TakeOver,
     /// The run's clone running `claude`, so the person can accept Claude's trust question there. Only for a run that
     /// failed because the folder isn't trusted; the folder is the one stored with the run.
     Trust,
@@ -837,10 +840,23 @@ enum TerminalFor {
 async fn runs_open_terminal(runs: State<'_, RunsState>, id: String, purpose: TerminalFor) -> Result<()> {
     match purpose {
         TerminalFor::Session => runs.attach(&id).await,
+        TerminalFor::TakeOver => runs.take_over(&id).await,
         TerminalFor::Trust => runs.open_claude(&id, runs::backend::Purpose::Trust).await,
         TerminalFor::SignIn => runs.open_claude(&id, runs::backend::Purpose::SignIn).await,
         TerminalFor::Mode { mode } => runs.open_claude(&id, runs::backend::Purpose::Mode(mode)).await,
     }
+}
+
+/// The provider's own resume of a run handed over to Terminal, as one line to type there.
+#[tauri::command]
+async fn runs_resume_command(runs: State<'_, RunsState>, id: String) -> Result<String> {
+    runs.resume_command(&id).await
+}
+
+/// Resume here: you took a run handed over to Terminal back, so the harness takes its session back and starts it again.
+#[tauri::command]
+async fn runs_take_back(runs: State<'_, RunsState>, id: String) -> Result<Run> {
+    runs.take_back(&id).await
 }
 
 /// Bytes the run's session folder uses; a lower bound if counting took too long.
@@ -1202,6 +1218,8 @@ pub fn run() {
             runs_stop_all,
             workstreams_stop,
             runs_open_terminal,
+            runs_resume_command,
+            runs_take_back,
             runs_disk,
             runs_reveal_work_folder,
             agent_work_folder_git,

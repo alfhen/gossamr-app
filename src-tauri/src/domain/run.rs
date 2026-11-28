@@ -619,6 +619,9 @@ pub struct Run {
     /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// Resume here took it back from Terminal and it waits at rest for your message, which the run sheet asks for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resumed_here: bool,
     /// Its agent's permission requests that are still open, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<PermissionRequest>,
@@ -735,6 +738,7 @@ impl Run {
             announced_permissions: None,
             answer_waits: false,
             handed_over: false,
+            resumed_here: false,
             permissions: Vec::new(),
         }
     }
@@ -751,6 +755,16 @@ fn first_pass() -> u32 {
 }
 
 /// How far the app has followed a run's harness session: the last event it applied, and what those events left open.
+/// What a run read before its session was resumed, put back when the resume's first prompt is dropped.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeforeResume {
+    pub state: RunState,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub failure: Option<RunFailure>,
+}
+
 /// Kept beside the run and written with it, so an event is applied once, and a reconnect reads on from `seq`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -801,6 +815,22 @@ pub struct SessionFollow {
     /// The app resumed the session, with a carry on or a message; it is starting again until its `started` comes.
     #[serde(default)]
     pub resuming: bool,
+    /// Resume here took it back with no message: it waits at rest, reading as it did when handed over, until a turn of
+    /// its own or its `closed`.
+    #[serde(default)]
+    pub resumed_here: bool,
+    /// The harness dropped the first prompt after a take back because Terminal may still run the session: its notice
+    /// says why, so the drop that follows is not said again as a message the session ended before.
+    #[serde(default)]
+    pub held_in_terminal: bool,
+    /// What the run read before its session was resumed, until a turn starts: a resume whose first prompt is dropped
+    /// leaves it so again, not working with an idle agent.
+    #[serde(default)]
+    pub before_resume: Option<BeforeResume>,
+    /// Its first prompt after a resume was dropped while Terminal held the session: a message may try again, though the
+    /// run reads stopped, until a turn starts or the session closes.
+    #[serde(default)]
+    pub waits_for_terminal: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

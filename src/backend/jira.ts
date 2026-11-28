@@ -254,6 +254,18 @@ export class JiraBackend implements Backend {
     return invoke<void>("runs_open_terminal", { id, purpose: { type: "session" } });
   }
 
+  runsTakeOver(id: string) {
+    return invoke<void>("runs_open_terminal", { id, purpose: { type: "takeOver" } });
+  }
+
+  runsResumeCommand(id: string) {
+    return invoke<string>("runs_resume_command", { id });
+  }
+
+  runsTakeBack(id: string) {
+    return invoke<Run>("runs_take_back", { id });
+  }
+
   runsTrustFolder(id: string) {
     return invoke<void>("runs_open_terminal", { id, purpose: { type: "trust" } });
   }

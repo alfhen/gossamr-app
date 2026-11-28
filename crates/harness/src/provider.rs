@@ -60,6 +60,26 @@ impl Provider {
         }
     }
 
+    /// What names this provider's program in a process: its program's name, and the part of a path a package manager
+    /// installs it under, as a shim's `node <prefix>/@anthropic-ai/claude-code/cli.js` shows.
+    pub fn markers(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &["claude", "@anthropic-ai/claude-code/"],
+            Self::Codex => &["codex", "@openai/codex/"],
+            Self::Gemini => &["agy"],
+        }
+    }
+
+    /// A session id as this provider gives one, of the length it has (recorded in `spikes/acp/fixtures`): every one is
+    /// a UUID.
+    pub fn session_id_example(self) -> &'static str {
+        match self {
+            Self::Claude => "7a8b9cad-7777-4777-8777-777777777777",
+            Self::Codex => "01a202be-f21f-7830-9181-f641f5fe7259",
+            Self::Gemini => "01a202c1-f61e-7a40-bcee-a21a3599e509",
+        }
+    }
+
     pub fn binary(self) -> &'static str {
         match self {
             Self::Claude => "claude",

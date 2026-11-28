@@ -164,6 +164,60 @@ struct OpenRequest {
     cut: bool,
 }
 
+/// Why a take back waits: a process still holds the session, as Terminal's `claude --resume` does.
+pub const STILL_IN_TERMINAL: &str = "still runs this session in Terminal";
+/// Why a resume of a session Terminal never had waits: one of the providers' programs works in its folder.
+pub const WORKS_IN_WORKTREE: &str = "works in this run's worktree";
+/// Why it waits when a process names the session's id, as `tail -f <id>.jsonl` or `claude --resume <id>` does.
+pub const OPENS_SESSION: &str = "has this session open";
+/// Why the first prompt after a take back is dropped when the check could not be made.
+pub const CANNOT_CHECK_TERMINAL: &str = "Gossamr couldn't check whether Terminal still runs this session. Try again.";
+/// Each prompt such a drop left unsent, after its reason.
+pub const NOT_SENT: &str = "Not sent:";
+
+/// What still holds session `id` other than the harness's own agents (and `also`, this start's), in the words a take
+/// back and its first prompt refuse with: its provider id in a process's arguments, or a provider's program in its
+/// folder but in no other session's folder inside it, nor in the old `.claude/worktrees` of a clone.
+fn held_in_terminal(store: &Store, id: &str, row: &crate::store::SessionRow, also: Option<&crate::process::Process>) -> Result<Option<String>> {
+    Ok(TerminalScan::of(store, id, row, also)?.and_then(|scan| scan.held()))
+}
+
+/// What a check for a holder reads from the store, so the scan of every process can run with no lock held.
+struct TerminalScan {
+    provider_session: String,
+    cwd: std::path::PathBuf,
+    provider: String,
+    ours: Vec<crate::process::Process>,
+    skip: Vec<std::path::PathBuf>,
+    handed_over: bool,
+}
+
+impl TerminalScan {
+    fn of(store: &Store, id: &str, row: &crate::store::SessionRow, also: Option<&crate::process::Process>) -> Result<Option<TerminalScan>> {
+        let Some(provider_session) = row.provider_session.clone() else { return Ok(None) };
+        let mut ours: Vec<crate::process::Process> = store.agents()?.into_iter().map(|(_, agent)| agent).collect();
+        ours.extend(also.cloned());
+        let mut skip: Vec<std::path::PathBuf> = store.session_folders()?.into_iter().filter(|(other, folder)| other != id && folder != &row.cwd && folder.starts_with(&row.cwd)).map(|(_, folder)| folder).collect();
+        skip.push(row.cwd.join(".claude").join("worktrees"));
+        let handed_over = row.handed_over || store.was_handed_over(id)?;
+        Ok(Some(TerminalScan { provider_session, cwd: row.cwd.clone(), provider: row.provider.clone(), ours, skip, handed_over }))
+    }
+
+    /// The words a take back, a resume or a first prompt refuse with, by whether Terminal ever had the session.
+    fn held(&self) -> Option<String> {
+        let markers: Vec<&str> = crate::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
+        let pid = crate::process::holding(&self.provider_session, &self.cwd, &markers, &self.ours, &self.skip)?;
+        let provider = crate::provider::Provider::named(&self.provider);
+        // Named as `ps` shows it, so you can find it: what holds a session Terminal never had may be anything.
+        let name = crate::process::program_name(pid).unwrap_or_else(|| "a process".to_owned());
+        Some(match (self.handed_over, crate::process::names_id(pid, &self.provider_session)) {
+            (true, _) => format!("{} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.", provider.map_or("Its agent", crate::provider::Provider::label)),
+            (false, true) => format!("`{name}` (pid {pid}) {OPENS_SESSION}. Quit it, then message the agent."),
+            (false, false) => format!("A `{name}` (pid {pid}) {WORKS_IN_WORKTREE}. Quit it, then message the agent."),
+        })
+    }
+}
+
 enum Request {
     Prompt(String),
     /// An answer to an open question: to its held `ask` call, or else as the next prompt, before those already queued.
@@ -341,6 +395,9 @@ impl Harness {
         // Queued before the session's task starts, so a resume that answers has queued it.
         let first = carry_on.clone().map(Request::CarryOn);
         let carry_on = carry_on.is_some();
+        // Every process is read with no lock held; a store that can't say is a reason to look under the lock.
+        let scan = self.inner.with_store(|store| TerminalScan::of(store, id, &store.session(id)?, None));
+        let suspect = scan.map_or(true, |scan| scan.is_some_and(|scan| scan.held().is_some()));
         let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
             self.inner.leftovers_stopped(store, live)?;
             let row = store.session(id)?;
@@ -379,6 +436,12 @@ impl Harness {
                 return Err(why);
             }
             let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
+            // Handed over now or ever before, it may still run in Terminal: two agents on one session would write one
+            // transcript. Every resume asks, since a take back's start can end before its first prompt was checked.
+            // Scanned again under the lock only when the scan before it found something.
+            if suspect && let Some(words) = held_in_terminal(store, id, &row, None)? {
+                return Err(Error::Refused(words));
+            }
             let driver = self.driver(&row.provider)?;
             let endpoint = match row.endpoint {
                 Some(endpoint) => endpoint,
@@ -896,6 +959,7 @@ impl Harness {
         let tools = endpoints.register(&endpoint, (id, start), &token, (tools, result_schema.clone()), calls, &provider);
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs(), id);
         let schema = result_schema.clone();
+        let resumed = resume.is_some();
         let launch = Launch { cwd, locked, model, login, effort, permissions, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
         // A first start that fails keeps its row's work: the caller discards the worktree, and if that fails, the
@@ -960,6 +1024,7 @@ impl Harness {
             result_schema: schema,
             broken: AtomicBool::new(false),
             ended,
+            check_terminal: AtomicBool::new(resumed),
         };
         for text in notices {
             task.emit(Body::Notice { text });
@@ -1468,6 +1533,9 @@ struct Task {
     broken: AtomicBool,
     /// How the agent's process ended, if its driver says.
     ended: oneshot::Receiver<AgentEnd>,
+    /// Resumed, and no prompt sent yet: the first one checks again that nothing else holds it, as a Terminal that
+    /// started its `claude` after the resume's own check does.
+    check_terminal: AtomicBool,
 }
 
 /// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
@@ -1564,6 +1632,10 @@ impl Task {
                         match self.prompt(&link, &mut queued) {
                             Some(next) => turn = next,
                             None => break true,
+                        }
+                        // No prompt went out, so no turn holds the slot.
+                        if turn == Turn::Idle {
+                            slot = None;
                         }
                     }
                     Some(granted) => {
@@ -1704,6 +1776,9 @@ impl Task {
                             match self.prompt(&link, &mut queued) {
                                 Some(next) => turn = next,
                                 None => break 'run true,
+                            }
+                            if turn == Turn::Idle {
+                                slot = None;
                             }
                         }
                     }
@@ -2178,6 +2253,26 @@ impl Task {
     /// the store would not take is not sent, and the session stops on its broken store. None when the driver no longer
     /// takes commands: the session says so and stops.
     fn prompt(&self, link: &Link, queued: &mut VecDeque<(String, Option<String>)>) -> Option<Turn> {
+        // A `claude` that Terminal started after the take back's own check would write beside this one: what waits is
+        // dropped, unsent, and the client hears why.
+        if self.check_terminal.load(Ordering::Relaxed) {
+            let held = self.inner.with_store(|store| held_in_terminal(store, &self.id, &store.session(&self.id)?, link.process.as_ref()));
+            // Unchecked is not clear: the prompt waits for a check that could be made.
+            let refused = match held {
+                Ok(held) => held,
+                Err(_) => Some(CANNOT_CHECK_TERMINAL.to_owned()),
+            };
+            if let Some(words) = refused {
+                self.emit(Body::Notice { text: words });
+                for (text, _) in queued.iter() {
+                    self.emit(Body::Notice { text: format!("{NOT_SENT} {text}") });
+                }
+                self.drop_queued(queued);
+                self.emit(Body::PromptsDropped);
+                return Some(Turn::Idle);
+            }
+            self.check_terminal.store(false, Ordering::Relaxed);
+        }
         let (text, answers) = queued.pop_front().expect("a prompt is queued");
         if !self.emit(Body::Prompted { text: text.clone() }) {
             return Some(Turn::Idle);

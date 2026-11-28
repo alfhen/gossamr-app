@@ -70,6 +70,9 @@ pub struct Script {
     pub recorded: Vec<(String, Recorded)>,
     /// The tools the script's client declares, from a `{"tools": [...]}` line.
     pub tools: Vec<ToolSpec>,
+    /// How long the agent takes to go after a Stop, from a `{"stops_after_ms": n}` line, as a slow agent does. A Kill
+    /// ends it at once.
+    pub stops_after_ms: u64,
 }
 
 /// The largest script or recording read. H0's largest recording is 200 KB.
@@ -117,6 +120,10 @@ impl Script {
         }
         let mut script = Script::default();
         for (n, line) in lines {
+            if let Some(ms) = line.get("stops_after_ms") {
+                script.stops_after_ms = ms.as_u64().ok_or_else(|| format!("{n}: stops_after_ms is a number of milliseconds"))?;
+                continue;
+            }
             match (line.get("capabilities"), line.get("tools")) {
                 (Some(caps), _) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
                 (None, Some(tools)) => script.tools = serde_json::from_value(tools.clone()).map_err(|e| bad(n, e))?,
@@ -291,6 +298,7 @@ impl Mock {
             prompts: VecDeque::new(),
             in_turn: false,
             end,
+            stopping_at: None,
         };
         tokio::spawn(player.play());
         Ok(Link { commands, output, process: None, tree: None })
@@ -324,6 +332,9 @@ struct Player {
     prompts: VecDeque<String>,
     in_turn: bool,
     end: Option<EndReport>,
+    /// When a Stop the script makes slow takes the agent away: kept here, so a step's timeout that drops the wait
+    /// for it does not drop the Stop.
+    stopping_at: Option<tokio::time::Instant>,
 }
 
 impl Player {
@@ -507,12 +518,31 @@ impl Player {
     /// recording does not have here is a divergence.
     async fn wait(&mut self, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         loop {
+            if let Some(at) = self.stopping_at {
+                let slow = tokio::time::sleep_until(at);
+                tokio::pin!(slow);
+                // A Kill that comes meanwhile ends it at once; whatever comes is received all the same.
+                loop {
+                    tokio::select! {
+                        _ = &mut slow => return Got::Stopped,
+                        next = self.commands.recv() => {
+                            let Some(command) = next else { return Got::Stopped };
+                            if self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone())).is_none() || command == Command::Kill {
+                                return Got::Stopped;
+                            }
+                        }
+                    }
+                }
+            }
             let Some(command) = self.commands.recv().await else { return Got::Stopped };
             // A start that was resumed over is stopped: what it is sent is not its own any more.
             if self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone())).is_none() {
                 return Got::Stopped;
             }
             match command {
+                Command::Stop if self.mock.inner.script.stops_after_ms > 0 => {
+                    self.stopping_at = Some(tokio::time::Instant::now() + std::time::Duration::from_millis(self.mock.inner.script.stops_after_ms));
+                }
                 Command::Stop | Command::Kill => return Got::Stopped,
                 command if accept(&command) => return Got::Matched(command),
                 Command::Cancel if self.mock.inner.script.replay => return Got::Diverged("the replay was cancelled where the recording was not".into()),
@@ -702,5 +732,17 @@ mod tests {
         old.commands.send(Command::Prompt("stale".into())).unwrap();
         assert_eq!(old.output.recv().await, None, "the old start went, and played nothing");
         assert!(mock.received(&provider_session).is_empty(), "the stale prompt is not the new start's");
+    }
+
+    #[tokio::test]
+    async fn mock_a_kill_during_a_slow_stop_ends_it_at_once_and_both_are_received_in_order() {
+        let mock = Mock::new(Script::parse("{\"stops_after_ms\": 60000}\n{\"prompt\": null}").unwrap());
+        let mut agent = mock.open(launch(None)).unwrap();
+        let Some(Body::Started { provider_session, .. }) = agent.output.recv().await else { panic!() };
+        agent.commands.send(Command::Stop).unwrap();
+        agent.commands.send(Command::Prompt("late".into())).unwrap();
+        agent.commands.send(Command::Kill).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), agent.output.recv()).await.unwrap(), None, "the Kill ended it");
+        assert_eq!(mock.received(&provider_session), [Command::Stop, Command::Prompt("late".into()), Command::Kill]);
     }
 }
