@@ -285,7 +285,7 @@ fn all_pids() -> Vec<u32> {
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     let Ok(count) = usize::try_from(count) else { return Vec::new() };
     // Room for processes that start between the two calls.
-    let mut pids = vec![0 as libc::pid_t; count + 64];
+    let mut pids = vec![0 as libc::pid_t; count + 256];
     let size = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())).unwrap_or(libc::c_int::MAX);
     // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
     let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
@@ -612,47 +612,6 @@ fn children_of(parent: u32) -> Vec<u32> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn children_of(_parent: u32) -> Vec<u32> {
     vec![]
-}
-
-#[cfg(target_os = "macos")]
-fn all_pids() -> Vec<u32> {
-    // SAFETY: with no buffer, the call only says how many pids there are.
-    let now = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    // Room for those started since.
-    let mut pids = vec![0 as libc::pid_t; usize::try_from(now).unwrap_or(0) + 256];
-    let size = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())).unwrap_or(0);
-    // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
-    let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
-    pids.truncate(usize::try_from(count).unwrap_or(0).min(pids.len()));
-    pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).collect()
-}
-
-#[cfg(target_os = "linux")]
-fn all_pids() -> Vec<u32> {
-    let Ok(all) = std::fs::read_dir("/proc") else { return vec![] };
-    all.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).collect()
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn all_pids() -> Vec<u32> {
-    vec![]
-}
-
-#[cfg(target_os = "macos")]
-fn parent_of(pid: u32) -> Option<u32> {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: `info` is as large as `size` says, and the call fills at most that much.
-    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
-    // SAFETY: the call filled the whole struct.
-    (got == size).then(|| unsafe { info.assume_init() }.pbi_ppid)
-}
-
-/// Field 4 of `/proc/<pid>/stat`.
-#[cfg(not(target_os = "macos"))]
-fn parent_of(pid: u32) -> Option<u32> {
-    let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
-    stat_tail(&stat)?.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
