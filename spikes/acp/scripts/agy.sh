@@ -326,6 +326,13 @@ print(" ".join(seen))' "$tr")"; } | tee "$obs" ;;
       --prompt "$ASK_PROMPT" --prompt "$ANSWER_PROMPT" -- agy acp
     ask_report "$tr" "$wt" | tee "${tr%.jsonl}.observed.txt"; keep_mcp_log "$tr"; mcp_stop ;;
 
+  r8-prompt-during-unprompted)
+    # H8: a prompt sent while agy writes a message it started by itself after a background command ended.
+    wt=$(new_worktree gemini-acp-r8); tr=$(fixture $P acp r8-prompt-during-unprompted)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --keep-open 70 \
+      --prompt "Run the shell command 'ping -c 30 127.0.0.1 > ping.txt'." \
+      --prompt-when-unprompted "Reply with the single word READY and nothing else." -- agy acp ;;
+
   r7-background)
     # Verify major 3: a turn that ends while its command still runs, then 60 s idle: does agy start a turn by itself?
     wt=$(new_worktree gemini-acp-r7); tr=$(fixture $P acp r7-background)

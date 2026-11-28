@@ -1,0 +1,19 @@
+H8: a prompt sent while agy writes a message it started by itself.
+Recorded with `acp-spike acp --keep-open 70 --prompt-when-unprompted ...` run directly, not through agy.sh (its env.sh hashes
+config files in the login folder, which this run must not read). agy 1.5.14, gemini-3.8-flash, thought_level low.
+
+7876 ms   end_turn of the first prompt; `ping` still agy's child
+33841 ms  tool_call_update completed for the ping; descendants gone
+36336 ms  first chunk of agy's unprompted message
+36338 ms  session/prompt (id 6) sent, between the unprompted message's first and second chunks
+36338 to 37127 ms  the rest of the unprompted message, as before; usage_update at 37169
+39284 ms  "\n\nREADY", a message of its own, 2.1 s after the unprompted one ended
+39331 ms  end_turn for id 6
+
+agy accepted the prompt, did not refuse it, and did not answer it inside the running message: it finished that message,
+then answered the prompt, and ended the prompt's turn. The rule of docs/plan-harness.md H8 holds: the late updates go in
+the prompted turn, which ends with agy's answer.
+
+~/.gemini before and after (file list, sizes, mtimes only): agy's own per-session files changed (conversations/<id>.db,
+brain/<id>/..., annotations, implicit, conversation_summaries.db, a log, onboarding.json, bin/agentapi's mtime). No
+settings, config or credential file changed. No agy or ping process was left.
