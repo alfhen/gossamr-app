@@ -8,8 +8,9 @@
 //! the thread's `config.mcp_servers` under its per-session name, with its token in `http_headers` only, so it travels
 //! on stdin and is in no argv, no environment and no file, and only that one server key is approved without asking.
 //!
-//! Approvals are answered from H7b on. Until then each is declined in its own shape, so no turn waits on one, and the
-//! session says so.
+//! Each approval Codex asks for (a command, a file change, more permissions, another MCP server's tool) is a permission
+//! request, answered in its own shape and never wider than once: no `acceptForSession`, no execpolicy amendment, no
+//! `scope: session`. A `serverRequest/resolved` before the answer closes the request.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::unix::process::ExitStatusExt;
@@ -27,7 +28,7 @@ use crate::binary::CliPlaces;
 use crate::claude::driver::{LINE_MAX, Lines, write};
 use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, guard};
 use crate::env::RunEnv;
-use crate::event::{Body, FailKind, TurnEnd};
+use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::process::{self, Process};
 use crate::provider::Provider;
 
@@ -338,8 +339,8 @@ impl Agent {
                 }
                 command = commands.recv(), if listening => match command {
                     Some(Command::Prompt(text)) => self.rpc.prompt(text),
-                    // Approvals are answered from H7b on.
-                    Some(Command::Answer { .. }) => {}
+                    // Codex's answers hold no reason, so a deny's message stays with the session.
+                    Some(Command::Answer { id, decision, .. }) => self.rpc.answer(&id, decision),
                     Some(Command::Cancel) => self.rpc.cancel(),
                     // Codex's own sandbox setting decides what it may do; Gossamr's choice is Claude's alone.
                     Some(Command::SetPermissions(_)) => {}
@@ -471,6 +472,21 @@ enum Asked {
     Interrupt,
 }
 
+/// A request of app-server's that waits for the person: its id as Codex sent it, and how it is answered.
+struct Pending {
+    id: Value,
+    shape: Shape,
+}
+
+enum Shape {
+    /// A command or a file change: `decision`, `accept` or `decline`.
+    Decision,
+    /// More permissions: the profile asked for, granted for this turn alone, or none.
+    Grant(Value),
+    /// Another MCP server's tool, by elicitation: `action`.
+    Action,
+}
+
 /// The JSON-RPC conversation with app-server, apart from the process.
 struct Rpc {
     /// None once stdin is closed.
@@ -493,6 +509,8 @@ struct Rpc {
     broken: bool,
     /// An item started since the agent last looked, so its process tree may have grown.
     item_started: bool,
+    /// Requests that wait for the person, by the driver's id of each: the JSON text of Codex's id.
+    pending: HashMap<String, Pending>,
 }
 
 impl Rpc {
@@ -514,6 +532,7 @@ impl Rpc {
             total: None,
             broken: false,
             item_started: false,
+            pending: HashMap::new(),
         };
         // No `capabilities`, so `experimentalApi` is never set.
         let client = json!({"name": "gossamr", "title": "Gossamr", "version": env!("CARGO_PKG_VERSION")});
@@ -540,6 +559,7 @@ impl Rpc {
     fn fail(&mut self, kind: FailKind, reason: String) {
         self.turn = None;
         self.held.clear();
+        self.pending.clear();
         self.emit(Body::Failed { kind, reason });
     }
 
@@ -580,7 +600,7 @@ impl Rpc {
     fn read(&mut self, line: &str) {
         let Ok(line) = serde_json::from_str::<Value>(line) else { return };
         match (line["method"].as_str(), line.get("id")) {
-            (Some(method), Some(id)) => self.asks(method, id.clone()),
+            (Some(method), Some(id)) => self.asks(method, id.clone(), &line["params"]),
             (Some(method), None) => self.notified(method, &line["params"]),
             (None, Some(id)) => {
                 let (id, asked) = (id.as_u64(), id.as_u64().and_then(|id| self.asked.remove(&id)));
@@ -590,18 +610,54 @@ impl Rpc {
         }
     }
 
-    /// A request of app-server's, answered at once so no turn waits on it: an approval is declined in its own shape until
-    /// H7b answers approvals, anything else is refused.
-    fn asks(&mut self, method: &str, id: Value) {
-        let (declined, what) = match method {
-            "item/commandExecution/requestApproval" => (json!({"decision": "decline"}), "to run a command"),
-            "item/fileChange/requestApproval" => (json!({"decision": "decline"}), "to change files"),
-            "item/permissions/requestApproval" => (json!({"permissions": {}, "scope": "turn"}), "for more permissions"),
-            "mcpServer/elicitation/request" => (json!({"action": "decline", "content": null}), "to run another MCP server's tool"),
+    /// A request of app-server's: an approval becomes a permission request, with all Codex gave but its ids, so a
+    /// command comes whole. Anything else is refused at once, so no turn waits on it.
+    fn asks(&mut self, method: &str, id: Value, params: &Value) {
+        let (kind, tool, shape) = match method {
+            "item/commandExecution/requestApproval" => (PermissionKind::Command, "command".to_owned(), Shape::Decision),
+            "item/fileChange/requestApproval" => (PermissionKind::FileChange, "file_change".to_owned(), Shape::Decision),
+            "item/permissions/requestApproval" => (PermissionKind::Permissions, "permissions".to_owned(), Shape::Grant(params["permissions"].clone())),
+            "mcpServer/elicitation/request" if asks_only_yes_or_no(params) => (PermissionKind::Tool, params["serverName"].as_str().unwrap_or_default().to_owned(), Shape::Action),
+            "mcpServer/elicitation/request" => {
+                // A form with fields or a page to open: an Allow could not fill it in.
+                self.send(json!({"id": id, "result": {"action": "decline", "content": null}}));
+                let server = params["serverName"].as_str().unwrap_or("an MCP server");
+                return self.emit(Body::Notice { text: format!("{server} asked for input Gossamr can't give, so it was declined.") });
+            }
             _ => return self.send(json!({"id": id, "error": {"code": -32601, "message": "not supported by this client"}})),
         };
-        self.send(json!({"id": id, "result": declined}));
-        self.emit(Body::Notice { text: format!("Codex asked {what}. Gossamr can't answer Codex's approvals yet, so it declined this.") });
+        let mut input = params.clone();
+        if let Some(fields) = input.as_object_mut() {
+            for gone in ["threadId", "turnId", "itemId", "startedAtMs", "environmentId"] {
+                fields.remove(gone);
+            }
+        }
+        let request = id.to_string();
+        self.pending.insert(request.clone(), Pending { id, shape });
+        self.emit(Body::Permission { id: request, kind, tool, input });
+    }
+
+    /// The person's answer, in the request's own shape and for it alone. A request Codex has resolved is not answered.
+    fn answer(&mut self, request: &str, decision: Decision) {
+        let Some(Pending { id, shape }) = self.pending.remove(request) else { return };
+        let allow = decision == Decision::Allow;
+        let result = match (shape, allow) {
+            (Shape::Decision, true) => json!({"decision": "accept"}),
+            (Shape::Decision, false) => json!({"decision": "decline"}),
+            (Shape::Grant(asked), true) => json!({"permissions": asked, "scope": "turn"}),
+            (Shape::Grant(_), false) => json!({"permissions": {}, "scope": "turn"}),
+            (Shape::Action, true) => json!({"action": "accept", "content": {}}),
+            (Shape::Action, false) => json!({"action": "decline", "content": null}),
+        };
+        self.send(json!({"id": id, "result": result}));
+    }
+
+    /// Codex no longer waits on a request it asked, answered or not: one still open is closed.
+    fn resolved(&mut self, params: &Value) {
+        let request = params["requestId"].to_string();
+        if self.pending.remove(&request).is_some() {
+            self.emit(Body::PermissionClosed { id: request });
+        }
     }
 
     fn answered(&mut self, request: Option<u64>, asked: Option<Asked>, line: &Value) {
@@ -681,6 +737,7 @@ impl Rpc {
                 _ => {}
             },
             "thread/tokenUsage/updated" => self.total = Some(params["tokenUsage"]["total"].clone()),
+            "serverRequest/resolved" => self.resolved(params),
             "turn/completed" => self.completed(&params["turn"]),
             "configWarning" | "deprecationNotice" => {
                 let summary = params["summary"].as_str().unwrap_or("Codex warned about its setup");
@@ -696,6 +753,14 @@ impl Rpc {
 
     fn completed(&mut self, turn: &Value) {
         let Some(running) = self.turn.take() else { return };
+        // Codex resolves what it asked before its turn ends; one it did not is closed here, so the run says it ended
+        // blocked on it.
+        let mut left: Vec<String> = self.pending.drain().map(|(request, _)| request).collect();
+        left.sort();
+        for request in left {
+            self.emit(Body::Notice { text: "Codex's turn ended while it waited for your answer to a request.".into() });
+            self.emit(Body::PermissionClosed { id: request });
+        }
         if let Some(used) = usage(running.from.as_ref(), self.total.as_ref()) {
             self.emit(used);
         }
@@ -713,6 +778,13 @@ impl Rpc {
             self.prompt(text);
         }
     }
+}
+
+/// An elicitation an Allow or a Deny answers: a form that asks for no field, as Codex's approval of another server's
+/// tool is (H0, R1). A page to open, or a field to fill, is not one.
+fn asks_only_yes_or_no(params: &Value) -> bool {
+    let fields = &params["requestedSchema"]["properties"];
+    params["mode"] != "url" && params.get("url").is_none() && (fields.is_null() || fields.as_object().is_some_and(serde_json::Map::is_empty))
 }
 
 /// The version in an `initialize` answer's `userAgent`: `<client>/<version> (<platform>) ...`.

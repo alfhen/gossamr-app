@@ -19,8 +19,13 @@
 //! that starts `sleep 60` a moment later, writes its pid to `inner.pid` and exits, as `npm run dev &` does: the sleep is
 //! then no child of app-server's, only a member of the shell's group. `escape` starts a shell that sends this program's
 //! `sleep 60` to the background in a session of its own and exits at once; once the sleep has written its pid to
-//! `escaped.pid`, `item/started` follows. The sleep is then in no tree or group app-server leads to. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
-//! 900, and completes the turn once it is answered.
+//! `escaped.pid`, `item/started` follows. The sleep is then in no tree or group app-server leads to. `approval` sends the
+//! request `FAKE_APP_SERVER_APPROVAL` names, as id 900, with the params Codex 0.171.0 sends for it, and once it is
+//! answered says `serverRequest/resolved` and completes the turn. A command's is an escalation of a whole commit and
+//! push; a file change carries `FAKE_APP_SERVER_GRANT_ROOT` as its `grantRoot`, if set; an elicitation asks for a field
+//! with `FAKE_APP_SERVER_ELICIT_FIELD` set. `FAKE_APP_SERVER_RESOLVE` set to `first` resolves the request at once and
+//! keeps the turn running until `turn/interrupt`, as Codex does when it withdraws one; set to `unresolved`, it completes
+//! the turn at once and never resolves it.
 //!
 //! `sleep <seconds> [<pid file> [<child's pid file>]]` only sleeps, with no `FAKE_APP_SERVER_OUT` needed, once it has
 //! written its pid to the file. With a second file it first starts a child of its own that does the same with that
@@ -198,6 +203,7 @@ impl Fake {
             Some(_) if !id.is_null() => self.say(json!({"id": id, "error": {"code": -32601, "message": "unknown method"}})),
             // The answer to the approval it asked: the turn goes on to its end.
             None if *id == 900 => {
+                self.notify("serverRequest/resolved", json!({"threadId": "thr-fake-1", "requestId": 900}));
                 if let Some(turn) = self.turn.take() {
                     self.notify("turn/completed", json!({"threadId": "thr-fake-1", "turn": {"id": turn, "status": "completed"}}));
                 }
@@ -237,7 +243,22 @@ impl Fake {
         }
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("approval") {
             let method = std::env::var("FAKE_APP_SERVER_APPROVAL").unwrap_or_default();
-            self.say(json!({"id": 900, "method": method, "params": {"threadId": thread, "turnId": turn, "itemId": format!("item-{n}")}}));
+            let mut params = approval(&method);
+            params["threadId"] = thread.clone();
+            params["turnId"] = Value::from(turn.as_str());
+            if method != "mcpServer/elicitation/request" {
+                params["itemId"] = Value::from(format!("item-{n}"));
+                params["startedAtMs"] = Value::from(1_700_000_000_000u64);
+            }
+            self.say(json!({"id": 900, "method": method, "params": params}));
+            match std::env::var("FAKE_APP_SERVER_RESOLVE").as_deref() {
+                Ok("first") => self.notify("serverRequest/resolved", json!({"threadId": thread, "requestId": 900})),
+                Ok("unresolved") => {
+                    self.turn = None;
+                    self.notify("turn/completed", json!({"threadId": thread, "turn": {"id": turn, "status": "completed"}}));
+                }
+                _ => {}
+            }
             return;
         }
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("command") {
@@ -254,5 +275,44 @@ impl Fake {
         self.notify("thread/tokenUsage/updated", json!({"threadId": thread, "turnId": turn, "tokenUsage": {"last": last, "total": total}}));
         self.turn = None;
         self.notify("turn/completed", json!({"threadId": thread, "turn": {"id": turn, "status": "completed"}}));
+    }
+}
+
+/// What Codex 0.171.0 asks with `method`, but the thread, turn and item ids (H0, `2-*` and `r1-*`).
+fn approval(method: &str) -> Value {
+    let command = "/bin/zsh -lc \"printf 'pushed' > pushed.txt && git add pushed.txt && git commit -m 'spike push' && git push -u origin HEAD\"";
+    match method {
+        "item/commandExecution/requestApproval" => json!({
+            "command": command,
+            "cwd": "/scratch/wt",
+            "reason": "May I create pushed.txt, commit it, and push the current branch to origin?",
+            "commandActions": [{"type": "unknown", "command": command}],
+            "kind": "command",
+            "proposedExecpolicyAmendment": ["/bin/zsh", "-lc", "printf 'pushed' > pushed.txt"],
+            "availableDecisions": ["accept", {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh", "-lc", "printf 'pushed' > pushed.txt"]}}, "cancel"],
+            "environmentId": null,
+        }),
+        "item/fileChange/requestApproval" => json!({"grantRoot": std::env::var("FAKE_APP_SERVER_GRANT_ROOT").ok(), "reason": null}),
+        "item/permissions/requestApproval" => json!({
+            "cwd": "/scratch/wt",
+            "reason": "May I have write access to the current workspace folder?",
+            "permissions": {"network": null, "fileSystem": {"read": null, "write": ["/scratch/wt"], "entries": [{"path": {"type": "path", "path": "/scratch/wt"}, "access": "write"}]}},
+            "environmentId": null,
+        }),
+        "mcpServer/elicitation/request" => {
+            let properties = match std::env::var_os("FAKE_APP_SERVER_ELICIT_FIELD") {
+                Some(_) => json!({"name": {"type": "string"}}),
+                None => json!({}),
+            };
+            json!({
+                "serverName": "other",
+                "mode": "form",
+                "message": "Allow the other MCP server to run tool \"ping\"?",
+                "requestedSchema": {"type": "object", "properties": properties},
+                "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"], "tool_name": "ping"},
+                "environmentId": null,
+            })
+        }
+        _ => json!({}),
     }
 }

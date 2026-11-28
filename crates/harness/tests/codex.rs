@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::*;
 use harness::codex::driver::CodexDriver;
 use harness::driver::{Command, Driver, Launch, Link, Secret};
-use harness::event::{Body, FailKind, TurnEnd};
+use harness::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use harness::process::{self, Listing, Process};
 use harness::session::{Harness, Open};
 use harness::store::Store;
@@ -255,23 +255,172 @@ async fn codex_stop_kills_a_command_that_outlived_turn_interrupt() {
     }
 }
 
+/// The approval methods, with the kind and tool each becomes and its answers in Codex's own shape, allow then deny.
+fn approvals() -> [(&'static str, PermissionKind, &'static str, Value, Value); 4] {
+    use serde_json::json;
+    let profile = json!({"network": null, "fileSystem": {"read": null, "write": ["/scratch/wt"], "entries": [{"path": {"type": "path", "path": "/scratch/wt"}, "access": "write"}]}});
+    [
+        ("item/commandExecution/requestApproval", PermissionKind::Command, "command", json!({"decision": "accept"}), json!({"decision": "decline"})),
+        ("item/fileChange/requestApproval", PermissionKind::FileChange, "file_change", json!({"decision": "accept"}), json!({"decision": "decline"})),
+        ("item/permissions/requestApproval", PermissionKind::Permissions, "permissions", json!({"permissions": profile, "scope": "turn"}), json!({"permissions": {}, "scope": "turn"})),
+        ("mcpServer/elicitation/request", PermissionKind::Tool, "other", json!({"action": "accept", "content": {}}), json!({"action": "decline", "content": null})),
+    ]
+}
+
+/// The driver's answer to the fake's request 900, if it sent one.
+fn answer_to_900(run: &Run) -> Option<Value> {
+    run.requests().into_iter().find(|line| line["id"] == 900 && line.get("method").is_none())
+}
+
+/// One turn of the fake asking `method` (with `extra`), answered `decision` once it asks: every event of the turn.
+async fn asked_and_answered(run: &Run, method: &str, extra: &[(&str, &str)], decision: Decision) -> Vec<Body> {
+    let mut env = vec![("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", method)];
+    env.extend_from_slice(extra);
+    let mut link = driver().open(run.launch(&env, None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    let mut said = said_until(&mut link, |body| matches!(body, Body::Permission { .. })).await;
+    let Some(Body::Permission { id, .. }) = said.last().cloned() else { unreachable!() };
+    link.commands.send(Command::Answer { id, decision, message: Some("not now".into()) }).unwrap();
+    said.extend(said_until(&mut link, Body::ends_turn).await);
+    stopped(&mut link).await;
+    said
+}
+
 #[tokio::test]
-async fn codex_each_approval_is_declined_in_its_own_shape_until_h7b_and_the_turn_goes_on() {
-    let declines = [
-        ("item/commandExecution/requestApproval", serde_json::json!({"decision": "decline"})),
-        ("item/fileChange/requestApproval", serde_json::json!({"decision": "decline"})),
-        ("item/permissions/requestApproval", serde_json::json!({"permissions": {}, "scope": "turn"})),
-        ("mcpServer/elicitation/request", serde_json::json!({"action": "decline", "content": null})),
-    ];
-    for (method, declined) in declines {
-        let run = Run::new();
-        let said = one_turn(&run, run.launch(&[("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", method)], None, None, None)).await;
-        let answer = run.requests().into_iter().find(|line| line["id"] == 900 && line.get("method").is_none()).unwrap_or_else(|| panic!("{method} was answered"));
-        assert_eq!(answer["result"], declined, "{method}");
-        let told = said.iter().any(|body| matches!(body, Body::Notice { text } if text.contains("Gossamr can't answer Codex's approvals yet, so it declined this.")));
-        assert!(told, "the session says it was declined: {said:?}");
-        assert_eq!(said.last(), Some(&Body::TurnEnded { how: TurnEnd::Done }), "{method}: the turn did not wait on it");
+async fn codex_each_approval_kind_is_a_permission_request_answered_allow_and_deny_in_its_own_shape() {
+    for (method, kind, tool, allowed, denied) in approvals() {
+        for (decision, want) in [(Decision::Allow, allowed.clone()), (Decision::Deny, denied)] {
+            let run = Run::new();
+            let said = asked_and_answered(&run, method, &[], decision).await;
+            let asked = said.iter().find_map(|body| match body {
+                Body::Permission { kind, tool, input, .. } => Some((*kind, tool.clone(), input.clone())),
+                _ => None,
+            });
+            let (got_kind, got_tool, input) = asked.unwrap_or_else(|| panic!("{method} became a permission request: {said:?}"));
+            assert_eq!((got_kind, got_tool.as_str()), (kind, tool), "{method}");
+            for id in ["threadId", "turnId", "itemId", "startedAtMs", "environmentId"] {
+                assert!(input.get(id).is_none(), "{method}: the request holds no {id}");
+            }
+            assert_eq!(answer_to_900(&run).map(|answer| answer["result"].clone()), Some(want), "{method} answered {decision:?}");
+            assert!(!said.iter().any(|body| matches!(body, Body::PermissionClosed { .. })), "{method}: an answered request is not closed");
+            assert_eq!(said.last(), Some(&Body::TurnEnded { how: TurnEnd::Done }), "{method}: the turn went on to its end");
+        }
     }
+}
+
+#[tokio::test]
+async fn codex_no_answer_is_wider_than_once() {
+    let mut answers = vec![];
+    for (method, ..) in approvals() {
+        for decision in [Decision::Allow, Decision::Deny] {
+            let run = Run::new();
+            asked_and_answered(&run, method, &[], decision).await;
+            answers.push(answer_to_900(&run).expect("answered"));
+        }
+    }
+    for answer in &answers {
+        let text = answer.to_string();
+        for wide in ["acceptForSession", "acceptWithExecpolicyAmendment", "applyNetworkPolicyAmendment", "\"session\"", "\"always\"", "persist", "strictAutoReview"] {
+            assert!(!text.contains(wide), "{answer} holds {wide}");
+        }
+        assert!(answer["result"].get("scope").is_none_or(|scope| scope == "turn"), "{answer}");
+    }
+}
+
+#[tokio::test]
+async fn codex_an_escalation_comes_to_needs_you_with_the_whole_command() {
+    let run = Run::new();
+    let said = asked_and_answered(&run, "item/commandExecution/requestApproval", &[], Decision::Allow).await;
+    let input = said.iter().find_map(|body| match body {
+        Body::Permission { input, .. } => Some(input.clone()),
+        _ => None,
+    });
+    let input = input.expect("a permission request");
+    let whole = "/bin/zsh -lc \"printf 'pushed' > pushed.txt && git add pushed.txt && git commit -m 'spike push' && git push -u origin HEAD\"";
+    assert_eq!(input["command"], whole, "the whole command, not its first word or the amendment Codex proposes");
+    assert_eq!(input["reason"], "May I create pushed.txt, commit it, and push the current branch to origin?");
+    assert_eq!(input["cwd"], "/scratch/wt");
+}
+
+#[tokio::test]
+async fn codex_grant_root_permissions_commands_and_elicitations_are_never_auto_allowed() {
+    let asked = |said: &[Body]| said.iter().find(|body| matches!(body, Body::Permission { .. })).cloned().expect("a permission request");
+    let run = Run::new();
+    let plain = asked(&asked_and_answered(&run, "item/fileChange/requestApproval", &[], Decision::Deny).await);
+    assert!(plain.may_be_auto_allowed(), "a file change with no grantRoot may be, once its path is checked");
+    let run = Run::new();
+    let rooted = asked(&asked_and_answered(&run, "item/fileChange/requestApproval", &[("FAKE_APP_SERVER_GRANT_ROOT", "/scratch")], Decision::Deny).await);
+    assert!(matches!(&rooted, Body::Permission { input, .. } if input["grantRoot"] == "/scratch"), "the request shows its grantRoot: {rooted:?}");
+    assert!(!rooted.may_be_auto_allowed(), "a grantRoot request never is");
+    for method in ["item/permissions/requestApproval", "item/commandExecution/requestApproval", "mcpServer/elicitation/request"] {
+        let run = Run::new();
+        let request = asked(&asked_and_answered(&run, method, &[], Decision::Deny).await);
+        assert!(!request.may_be_auto_allowed(), "{method} never is");
+    }
+}
+
+#[tokio::test]
+async fn codex_an_elicitation_that_asks_for_a_field_is_declined_and_said_so() {
+    let run = Run::new();
+    let said = one_turn(&run, run.launch(&[("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", "mcpServer/elicitation/request"), ("FAKE_APP_SERVER_ELICIT_FIELD", "1")], None, None, None)).await;
+    assert_eq!(answer_to_900(&run).map(|answer| answer["result"].clone()), Some(serde_json::json!({"action": "decline", "content": null})));
+    assert!(!said.iter().any(|body| matches!(body, Body::Permission { .. })), "no Allow could fill it in: {said:?}");
+    assert!(said.iter().any(|body| matches!(body, Body::Notice { text } if text == "other asked for input Gossamr can't give, so it was declined.")), "{said:?}");
+}
+
+#[tokio::test]
+async fn codex_a_resolved_request_is_closed_and_a_later_answer_to_it_is_refused_and_never_sent() {
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let extra = [("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", "item/commandExecution/requestApproval"), ("FAKE_APP_SERVER_RESOLVE", "first")];
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &extra, &out);
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: tmp.path().to_path_buf(), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::PermissionClosed { .. } | Body::TurnEnded { .. })).await;
+    let asked = seen.iter().find_map(|event| match &event.body {
+        Body::Permission { id, .. } => Some(id.clone()),
+        _ => None,
+    });
+    let asked = asked.expect("the request came");
+    assert_eq!(seen.last().map(|event| &event.body), Some(&Body::PermissionClosed { id: asked.clone() }), "closed while its turn runs");
+    let refused = harness.answer(&id, &asked, Decision::Allow, None);
+    assert!(matches!(refused, Err(harness::error::Error::NotOpen(_))), "{refused:?}");
+    harness.cancel(&id).unwrap();
+    until(&mut events, Body::ends_turn).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    let requests: Vec<Value> = std::fs::read_to_string(out.join("requests.jsonl")).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert!(!requests.iter().any(|line| line["id"] == 900), "nothing was sent for it: {requests:?}");
+}
+
+#[tokio::test]
+async fn codex_an_answer_that_comes_after_codex_resolved_its_request_is_not_sent() {
+    let run = Run::new();
+    let env = [("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", "item/fileChange/requestApproval"), ("FAKE_APP_SERVER_RESOLVE", "first")];
+    let mut link = driver().open(run.launch(&env, None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    let said = said_until(&mut link, |body| matches!(body, Body::PermissionClosed { .. })).await;
+    let Some(Body::PermissionClosed { id }) = said.last().cloned() else { unreachable!() };
+    link.commands.send(Command::Answer { id, decision: Decision::Allow, message: None }).unwrap();
+    link.commands.send(Command::Cancel).unwrap();
+    said_until(&mut link, Body::ends_turn).await;
+    stopped(&mut link).await;
+    assert_eq!(answer_to_900(&run), None, "the late answer never reached Codex");
+}
+
+#[tokio::test]
+async fn codex_a_turn_that_ends_with_a_request_open_closes_it_and_says_so() {
+    let run = Run::new();
+    let env = [("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", "item/commandExecution/requestApproval"), ("FAKE_APP_SERVER_RESOLVE", "unresolved")];
+    let said = one_turn(&run, run.launch(&env, None, None, None)).await;
+    let asked = said.iter().find_map(|body| match body {
+        Body::Permission { id, .. } => Some(id.clone()),
+        _ => None,
+    });
+    let at = said.iter().position(|body| *body == Body::PermissionClosed { id: asked.clone().expect("asked") });
+    assert!(at.is_some_and(|at| at + 1 < said.len()), "closed before the turn's end: {said:?}");
+    assert!(said.iter().any(|body| matches!(body, Body::Notice { text } if text == "Codex's turn ended while it waited for your answer to a request.")), "{said:?}");
 }
 
 /// Until `process` has gone, within 10 s.
@@ -758,31 +907,38 @@ fn lines_of(fixture: &Path) -> Vec<Value> {
     std::fs::read_to_string(fixture).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
-/// The recordings H7a replays: each that has a turn and no request of the agent's, whose approvals are H7b's.
+/// The recordings with a turn.
 fn fixtures() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(app_server()).unwrap().map(|entry| entry.unwrap().path()).collect();
     files.retain(|file| file.extension().is_some_and(|ext| ext == "jsonl") && !file.to_string_lossy().ends_with(".mcp-log.jsonl"));
-    files.retain(|file| {
-        let lines = lines_of(file);
-        let asks = lines.iter().any(|line| line["dir"] == "from_agent" && line["data"].get("method").is_some() && line["data"].get("id").is_some());
-        let turns = lines.iter().any(|line| line["dir"] == "to_agent" && line["data"]["method"] == "turn/start");
-        turns && !asks
-    });
+    files.retain(|file| lines_of(file).iter().any(|line| line["dir"] == "to_agent" && line["data"]["method"] == "turn/start"));
     files.sort();
     files
 }
 
-/// What the recorded client did: its prompts and interrupts, each with the seq of the agent line it follows.
+/// What the recorded client did: its prompts and interrupts, each with the seq of the agent line it follows, and its
+/// answer to each request of the agent's, by the request's place among them.
 enum Act {
     Prompt(String, u64),
     Cancel(u64),
+    Answer(Decision, usize),
 }
 
 /// The recorded client's acts, and how many turns the agent completed.
 fn recorded_client(lines: &[Value]) -> (Vec<Act>, usize) {
-    let (mut acts, mut completed, mut after) = (vec![], 0, 0);
+    let (mut acts, mut completed, mut after, mut asked) = (vec![], 0, 0, vec![]);
     for line in lines {
         let data = &line["data"];
+        if line["dir"] == "from_agent" && data.get("method").is_some() && data.get("id").is_some() {
+            asked.push(data["id"].clone());
+        }
+        if line["dir"] == "to_agent" && data.get("method").is_none() && let Some(nth) = asked.iter().position(|id| *id == data["id"]) {
+            let result = &data["result"];
+            let granted = result["permissions"].as_object().is_some_and(|granted| !granted.is_empty());
+            let allowed = result["decision"] == "accept" || result["action"] == "accept" || granted;
+            acts.push(Act::Answer(if allowed { Decision::Allow } else { Decision::Deny }, nth));
+            continue;
+        }
         match (line["dir"].as_str(), data["method"].as_str()) {
             (Some("to_agent"), Some("turn/start")) => {
                 let text = data["params"]["input"].as_array().into_iter().flatten().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n");
@@ -882,6 +1038,13 @@ async fn play(fixture: &Path) -> (Rig, Vec<harness::event::Event>) {
                 rig.played(after).await;
                 rig.harness.send(&id, text).unwrap();
             }
+            Act::Answer(decision, nth) => {
+                let asked = |seen: &[harness::event::Event]| seen.iter().filter_map(|event| match &event.body { Body::Permission { id, .. } => Some(id.clone()), _ => None }).nth(nth);
+                while asked(&seen).is_none() {
+                    next_of(&mut events, &mut seen).await;
+                }
+                rig.harness.answer(&id, &asked(&seen).unwrap(), decision, None).unwrap();
+            }
             Act::Cancel(after) => {
                 rig.played(after).await;
                 while !seen.iter().rev().find(|event: &&harness::event::Event| matches!(event.body, Body::TurnStarted) || event.body.ends_turn()).is_some_and(|event| event.body == Body::TurnStarted) {
@@ -944,8 +1107,8 @@ fn endpoints(rig: &Rig, fixture: &Path) -> (Option<String>, Option<String>) {
 async fn codex_every_app_server_fixture_projects_as_its_golden_file() {
     let goldens = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/codex/app-server");
     let mut differ = vec![];
-    // Of the 43, nine hold an approval (H7b) and five list models or setup with no turn.
-    assert_eq!(fixtures().len(), 29, "every recording with a turn and no approval is replayed");
+    // Of the 43, five list models or setup with no turn; nine of the rest hold approvals.
+    assert_eq!(fixtures().len(), 38, "every recording with a turn is replayed");
     for fixture in fixtures() {
         let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
         let (rig, seen) = play(&fixture).await;
