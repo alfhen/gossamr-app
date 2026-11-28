@@ -301,7 +301,7 @@ impl Mock {
             stopping_at: None,
         };
         tokio::spawn(player.play());
-        Ok(Link { commands, output, process: None })
+        Ok(Link { commands, output, process: None, tree: None })
     }
 }
 

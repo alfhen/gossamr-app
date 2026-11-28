@@ -324,7 +324,7 @@ impl ClaudeDriver {
             sent: vec![],
         };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
-        Ok(Link { commands, output: output_rx, process: Some(process) })
+        Ok(Link { commands, output: output_rx, process: Some(process), tree: None })
     }
 }
 

@@ -333,6 +333,285 @@ async fn codex_a_live_leftovers_command_in_a_group_of_its_own_is_stopped_with_it
     drop(stdin);
 }
 
+/// The tree the store holds for session `id`, read beside the harness that holds the store.
+fn tree_on_record(data: &Path, id: &str) -> Option<Vec<Process>> {
+    let raw = rusqlite::Connection::open(data.join("harness.sqlite")).unwrap();
+    let tree: Option<String> = raw.query_row("SELECT agent_tree FROM sessions WHERE id = ?1", [id], |row| row.get(0)).unwrap();
+    tree.map(|tree| serde_json::from_str(&tree).unwrap())
+}
+
+#[tokio::test]
+async fn codex_a_running_sessions_noted_tree_is_on_record_until_it_closes() {
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[("FAKE_APP_SERVER_TURN", "command")], &out);
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: tmp.path().to_path_buf(), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !out.join("command.pid").exists() {
+        assert!(tokio::time::Instant::now() < given, "the fake started its command");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let command = process_in(&out, "command.pid");
+    while !tree_on_record(&data, &id).is_some_and(|tree| tree.contains(&command)) {
+        assert!(tokio::time::Instant::now() < given, "the command in a group of its own is on record beside its app-server");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&command, "the command").await;
+    assert_eq!(tree_on_record(&data, &id), None, "and off it once the session closed");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_an_exited_app_servers_command_is_stopped_from_its_record_and_a_reused_pid_in_it_never_signalled() {
+    use std::io::Write;
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // An app-server a dead harness left, in the middle of a command it started in a group of its own.
+    let mut left = std::process::Command::new(FAKE)
+        .arg("app-server")
+        .env("FAKE_APP_SERVER_OUT", &out)
+        .env("FAKE_APP_SERVER_TURN", "command")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut stdin = left.stdin.take().unwrap();
+    for line in [r#"{"id":1,"method":"initialize","params":{}}"#, r#"{"id":2,"method":"thread/start","params":{}}"#, r#"{"id":3,"method":"turn/start","params":{"threadId":"thr-fake-1"}}"#] {
+        writeln!(stdin, "{line}").unwrap();
+    }
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !out.join("command.pid").exists() {
+        assert!(tokio::time::Instant::now() < given, "the fake started its command");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (agent, command) = (Process { pid: left.id(), started: process::started_of(left.id()).unwrap() }, process_in(&out, "command.pid"));
+    // Then the app-server crashed on its own, and its command runs on: no process leads to it now.
+    left.kill().unwrap();
+    left.wait().unwrap();
+    assert!(process::alive(&command), "the command outlived its app-server");
+    let mut other = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+    let reused = Process { pid: other.id(), started: process::started_of(other.id()).expect("it runs").saturating_sub(3_600) };
+    let store = Store::open(&data).unwrap();
+    store.create_session("s", "codex", false, tmp.path(), None).unwrap();
+    store.set_agent("s", Some(&agent)).unwrap();
+    // The record's second process started an hour before the one that has its pid now.
+    store.set_agent_tree("s", &[command.clone(), reused]).unwrap();
+    let harness = harness_on(&data, store, &[], &out);
+    gone(&command, "the exited app-server's command").await;
+    assert_eq!(process::seam::sent_to(other.id()), Vec::<i32>::new(), "the reused pid was never signalled");
+    assert!(other.try_wait().unwrap().is_none(), "and its process runs on");
+    harness.shutdown().await;
+    assert_eq!(reopen(&data).await.agents().unwrap(), [], "nothing is left on record");
+    other.kill().unwrap();
+    other.wait().unwrap();
+    drop(stdin);
+}
+
+/// A `sleep 60` that a shell in `folder` sent to the background before it exited, in the shell's group: the system's
+/// now, as the person's own job or an agent's command left it.
+fn left_by_a_shell(folder: &Path, session: Option<&str>) -> (u32, Process) {
+    let (group, left, _) = shell_leaves(folder, session, false);
+    (group, left)
+}
+
+/// The same, with a child of its own that it started first: what pid 1 took in is then a parent.
+fn left_with_a_child_by_a_shell(folder: &Path, session: Option<&str>) -> (Process, Process) {
+    let (_, left, child) = shell_leaves(folder, session, true);
+    (left, child.expect("the child runs"))
+}
+
+fn shell_leaves(folder: &Path, session: Option<&str>, with_child: bool) -> (u32, Process, Option<Process>) {
+    use std::io::BufRead;
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let file = |what: &str| folder.join(format!(".{what}-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let (pid_file, child_file) = (file("left"), file("child"));
+    // Not `/bin/sleep`: macOS hides the environment of its own programs, so the harness could not tell whose it is.
+    // One command sent to the background, not a list: a list would run in a subshell, which is the system's then.
+    let script = r#"cd "$1" || exit; shift; "$@" & echo $!"#;
+    let mut shell = std::process::Command::new("/bin/sh");
+    shell.args(["-c", script, "sh"]).arg(folder).arg(FAKE).args(["sleep", "60"]).arg(&pid_file).args(with_child.then_some(&child_file)).env_remove(process::SESSION_VARIABLE);
+    if let Some(session) = session {
+        shell.env(process::SESSION_VARIABLE, session);
+    }
+    let mut shell = shell.stdout(std::process::Stdio::piped()).process_group(0).spawn().unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    let group = shell.id();
+    shell.wait().unwrap();
+    let pid: u32 = line.trim().parse().unwrap();
+    let given = std::time::Instant::now() + Duration::from_secs(10);
+    while !pid_file.exists() {
+        assert!(std::time::Instant::now() < given, "the sleep runs as itself");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let running = |pid: u32| Process { pid, started: process::started_of(pid).expect("the sleep runs") };
+    let child = with_child.then(|| running(std::fs::read_to_string(&child_file).unwrap().trim().parse().unwrap()));
+    (group, running(pid), child)
+}
+
+/// A process that has exited, by the pid and start time it had.
+fn exited() -> Process {
+    let mut child = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+    let gone = Process { pid: child.id(), started: process::started_of(child.id()).unwrap() };
+    child.kill().unwrap();
+    child.wait().unwrap();
+    gone
+}
+
+fn end(left: &Process) {
+    let _ = process::signal(left, libc::SIGKILL);
+}
+
+#[tokio::test]
+async fn codex_a_stored_command_whose_pid_now_leads_an_older_group_gets_nothing_signalled() {
+    let (tmp, data) = data_dir();
+    // The person's own group whose leader exited, its member running on, as a pipeline whose first command exited.
+    let (group, member) = left_by_a_shell(tmp.path(), None);
+    let store = Store::open(&data).unwrap();
+    store.create_session("s", "codex", false, tmp.path(), None).unwrap();
+    store.set_agent("s", Some(&exited())).unwrap();
+    // The record's command had that pid, and started an hour after the group's member did.
+    store.set_agent_tree("s", &[Process { pid: group, started: member.started + 3_600 }]).unwrap();
+    let harness = harness_on(&data, store, &[], &tmp.path().join("out"));
+    assert_eq!(process::seam::sent_to(group), Vec::<i32>::new(), "the group its pid leads now was never signalled");
+    assert!(process::alive(&member), "and its member runs on");
+    harness.shutdown().await;
+    assert!(reopen(&data).await.session("s").unwrap().given_up.is_some(), "and the session stays given up on");
+    end(&member);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn codex_at_a_restart_what_the_system_took_in_in_the_worktree_after_the_agent_started_is_stopped_and_nothing_else() {
+    let (tmp, data) = data_dir();
+    let (worktree, elsewhere) = (tmp.path().join("clone+worktrees").join("b"), tmp.path().join("elsewhere"));
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (_, before) = left_by_a_shell(&worktree, Some("s"));
+    // Start times are in seconds on macOS.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let agent = exited();
+    let ((_, ours), (_, outside)) = (left_by_a_shell(&worktree, Some("s")), left_by_a_shell(&elsewhere, Some("s")));
+    // Yours, as a job you sent to the background in a Terminal opened there and then closed, and another session's.
+    let ((_, yours), (_, another)) = (left_by_a_shell(&worktree, None), left_by_a_shell(&worktree, Some("s2")));
+    let store = Store::open(&data).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let new = harness::store::NewSession { provider: "codex", locked: false, cwd: &worktree, model: None, login: None, effort: None, permissions: Default::default(), work: Some(&work), endpoint: None, tools: &[], result_schema: None };
+    store.insert_session("s", &new).unwrap();
+    store.set_agent("s", Some(&agent)).unwrap();
+    let harness = harness_on(&data, store, &[], &tmp.path().join("out"));
+    gone(&ours, "the job left in the worktree").await;
+    for (left, what) in [(&before, "one that started before the agent"), (&outside, "one outside the worktree"), (&yours, "one without the session's mark"), (&another, "another session's")] {
+        assert_eq!(process::seam::sent_to(left.pid), Vec::<i32>::new(), "{what} was never signalled");
+        assert!(process::alive(left), "and runs on");
+        end(left);
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_a_job_a_command_sent_to_the_background_in_a_session_of_its_own_goes_when_its_session_closes() {
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    let worktree = tmp.path().join("clone+worktrees").join("b");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[("FAKE_APP_SERVER_TURN", "escape")], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree, work: Some(work), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(out.join("escaped.pid")).map_or(true, |pid| pid.trim().is_empty()) {
+        assert!(tokio::time::Instant::now() < given, "the fake's shell left its job");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let escaped = process_in(&out, "escaped.pid");
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&escaped, "the job the command left").await;
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_at_a_sessions_end_what_the_system_took_in_from_you_in_its_worktree_runs_on() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // As `npm run dev &` in a Terminal opened in the worktree and then closed, or an editor started from there.
+    let ((_, yours), (_, another)) = (left_by_a_shell(&worktree, None), left_by_a_shell(&worktree, Some("another-session")));
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    for (left, what) in [(&yours, "yours"), (&another, "another session's")] {
+        assert_eq!(process::seam::sent_to(left.pid), Vec::<i32>::new(), "{what} was never signalled");
+        assert!(process::alive(left), "and runs on");
+        end(left);
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_at_a_sessions_end_what_its_agent_left_in_its_worktree_goes_with_what_that_started_and_yours_runs_on() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    // As `npm run dev &`: the system takes in npm, and the server npm started is npm's child, not the system's.
+    let (orphan, child) = left_with_a_child_by_a_shell(&worktree, Some(&id));
+    let (_, yours) = left_by_a_shell(&worktree, None);
+    // The app-server is among them too while it runs; the session's end looks once it has gone.
+    let found = process::marked_in(&worktree, 0, &id);
+    let at = |left: &Process| found.iter().position(|found| found == left);
+    assert!(at(&child).is_some_and(|child| at(&orphan).is_some_and(|orphan| orphan < child)), "the parent before its child: {found:?}");
+    assert_eq!(at(&yours), None, "and not yours");
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    gone(&orphan, "what the agent's command left").await;
+    gone(&child, "what that started").await;
+    assert_eq!(process::seam::sent_to(yours.pid), Vec::<i32>::new(), "yours was never signalled");
+    assert!(process::alive(&yours), "and runs on");
+    end(&yours);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_at_a_sessions_end_what_forks_after_the_first_listing_of_what_its_agent_left_goes_too() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    let (_, listed) = left_by_a_shell(&worktree, Some(&id));
+    let forked: Arc<std::sync::Mutex<Option<Process>>> = Arc::default();
+    let (hook_forked, folder, session) = (forked.clone(), worktree.clone(), id.clone());
+    process::seam::after_marked_listing(&id, move || *hook_forked.lock().unwrap() = Some(left_by_a_shell(&folder, Some(&session)).1));
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    let forked = forked.lock().unwrap().clone().expect("the first listing was taken");
+    gone(&listed, "what the first listing found").await;
+    gone(&forked, "what started after it").await;
+    harness.shutdown().await;
+}
+
 #[tokio::test]
 async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     // As `npm run dev &`: the command's shell exits, and the server it started lives on in the shell's group, no child of
@@ -354,6 +633,30 @@ async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     }
     stopped(&mut link).await;
     gone(&inner, "what the command left in its group").await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_on_linux_what_a_command_orphans_stays_in_app_servers_tree() {
+    let run = Run::new();
+    let mut link = driver().open(run.launch(&[("FAKE_APP_SERVER_TURN", "background")], None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    said_until(&mut link, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !run.out.join("inner.pid").exists() || std::fs::read_to_string(run.out.join("inner.pid")).unwrap().trim().is_empty() {
+        assert!(tokio::time::Instant::now() < given, "the shell started its sleep");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (server, inner) = (run.pid_of("pid"), run.pid_of("inner.pid"));
+    let shell: u32 = std::fs::read_to_string(run.out.join("shell.pid")).unwrap().trim().parse().unwrap();
+    while process::started_of(shell).is_some() {
+        assert!(tokio::time::Instant::now() < given, "the shell exited");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Its shell gone, the sleep is app-server's own: a subreaper takes in what its descendants orphan.
+    assert!(process::descendants(&server).contains(&inner), "the orphaned sleep is in app-server's tree");
+    stopped(&mut link).await;
+    gone(&inner, "the orphaned sleep").await;
 }
 
 #[tokio::test]

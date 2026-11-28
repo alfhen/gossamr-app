@@ -422,7 +422,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     // macOS adds `__CF_USER_TEXT_ENCODING` to every process it starts.
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
+    assert_eq!(names, ["GOSSAMR_SESSION", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
     let (locked, _) = {
         let fixture = native().join("11-locked.jsonl");
         let rig = rig(&fixture, &[]);
@@ -434,7 +434,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     let mut names: Vec<String> = locked.env().keys().cloned().collect();
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
+    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "GOSSAMR_SESSION", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
 }
 
 #[tokio::test]

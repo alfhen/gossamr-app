@@ -91,7 +91,10 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     "ALTER TABLE sessions ADD COLUMN agent_boot TEXT;
     ALTER TABLE sessions ADD COLUMN given_up_why TEXT;",
     // Who settles a normal session's permission prompts first: `auto`, or none for the provider's own start.
-    "ALTER TABLE sessions ADD COLUMN permissions TEXT;"];
+    "ALTER TABLE sessions ADD COLUMN permissions TEXT;",
+    // What the agent started that its driver noted, as JSON, each by pid and start time: a command Codex starts in a
+    // group of its own is no member of the agent's group, and once the agent has exited nothing else leads to it.
+    "ALTER TABLE sessions ADD COLUMN agent_tree TEXT;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -231,6 +234,8 @@ pub struct Recorded {
     pub boot: Option<String>,
     /// The repository worktree the session works in, if it names a repo.
     pub worktree: Option<PathBuf>,
+    /// What the agent started that its driver noted, recorded in the same boot as the agent.
+    pub tree: Vec<Process>,
 }
 
 impl Store {
@@ -370,8 +375,15 @@ impl Store {
                 "UPDATE sessions SET agent_pid = ?2, agent_started = ?3, agent_boot = ?4 WHERE id = ?1",
                 params![id, agent.pid, agent.started as i64, crate::process::boot_id()],
             )?,
-            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, agent_boot = NULL, given_up = 0, given_up_why = NULL WHERE id = ?1", [id])?,
+            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, agent_boot = NULL, agent_tree = NULL, given_up = 0, given_up_why = NULL WHERE id = ?1", [id])?,
         };
+        Ok(())
+    }
+
+    /// What the running start's agent started that its driver noted, kept beside the agent while it is on record.
+    pub fn set_agent_tree(&self, id: &str, tree: &[Process]) -> Result<()> {
+        let tree = serde_json::to_string(tree).expect("processes serialise");
+        self.conn.execute("UPDATE sessions SET agent_tree = ?2 WHERE id = ?1 AND agent_pid IS NOT NULL", params![id, tree])?;
         Ok(())
     }
 
@@ -382,6 +394,8 @@ impl Store {
         if taken_back {
             self.set_handed_over(id, false)?;
         }
+        // A new agent has started nothing yet: an earlier start's tree was dealt with before this one could begin.
+        self.conn.execute("UPDATE sessions SET agent_tree = NULL WHERE id = ?1", [id])?;
         self.set_agent(id, agent)?;
         tx.commit()?;
         Ok(())
@@ -466,14 +480,15 @@ impl Store {
 
     /// The agent on record for session `id`, or None when none is.
     pub fn agent(&self, id: &str) -> Result<Option<Recorded>> {
-        let row = self.conn.query_row("SELECT agent_pid, agent_started, agent_boot, cwd, repo IS NOT NULL FROM sessions WHERE id = ?1", [id], |row| {
-            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, bool>(4)?))
+        let row = self.conn.query_row("SELECT agent_pid, agent_started, agent_boot, cwd, repo IS NOT NULL, agent_tree FROM sessions WHERE id = ?1", [id], |row| {
+            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, bool>(4)?, json_column::<Vec<Process>>(row, 5)?))
         })?;
         Ok(match row {
-            (Some(pid), Some(started), boot, cwd, repo) => Some(Recorded {
+            (Some(pid), Some(started), boot, cwd, repo, tree) => Some(Recorded {
                 agent: Process { pid, started: started as u64 },
                 boot,
                 worktree: repo.then(|| PathBuf::from(OsString::from_vec(cwd))),
+                tree: tree.unwrap_or_default(),
             }),
             _ => None,
         })
