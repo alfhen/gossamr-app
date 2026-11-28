@@ -181,6 +181,17 @@ impl Body {
         matches!(self, Body::TurnEnded { .. } | Body::Failed { .. })
     }
 
+    /// Whether the per-repo auto-allow (proposal section 3.2) may answer this request at all, before it checks the
+    /// path: only a file change, and never one with Codex's `grantRoot`, which asks for writes under a root for the
+    /// rest of the session. A command, more permissions and a tool call, another server's elicitation among them,
+    /// always go to the person.
+    pub fn may_be_auto_allowed(&self) -> bool {
+        match self {
+            Body::Permission { kind: PermissionKind::FileChange, input, .. } => input.get("grantRoot").is_none_or(Value::is_null),
+            _ => false,
+        }
+    }
+
     /// The event without its private fields.
     pub fn withheld(&self) -> Body {
         if let Body::Withheld { .. } = self {

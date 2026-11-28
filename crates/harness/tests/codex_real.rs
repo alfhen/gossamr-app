@@ -141,3 +141,143 @@ async fn codex_real_a_job_a_command_sends_to_the_background_is_gone_by_the_turns
     assert!(started, "the command started its job and said its pid");
     assert_eq!((during, after), (vec![], vec![]), "the job was gone by the turn's end");
 }
+
+/// Every file and folder under `folder`, with its size and modification time, never what it holds: symbolic links are
+/// not followed.
+fn listing(folder: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut left = vec![folder.to_path_buf()];
+    while let Some(at) = left.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else { continue };
+        for entry in entries.flatten() {
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+            let name = entry.path().strip_prefix(folder).unwrap().display().to_string();
+            found.insert(name, format!("{} {:?}", meta.len(), meta.modified().ok()));
+            if meta.is_dir() {
+                left.push(entry.path());
+            }
+        }
+    }
+    found
+}
+
+/// What a login folder holds of the person's setup and sign-in, as opposed to what Codex records of its own runs
+/// (sessions, logs, its databases, caches).
+fn setup_of(listing: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+    let setup = |name: &str| ["config.toml", "auth.json", "AGENTS.md", "hooks.json", "rules", "prompts"].iter().any(|kept| name == *kept || name.starts_with(&format!("{kept}/")));
+    listing.iter().filter(|(name, _)| setup(name)).map(|(name, state)| (name.clone(), state.clone())).collect()
+}
+
+/// Under the person's own Codex default (no sandbox or approval policy from Gossamr), a file edit asks and is allowed
+/// through `harness answer`, then an escalation to commit asks and is allowed the same way: the file is written and the
+/// commit lands. The scratch repo's remote is a local bare repo, and the login folder's setup is the same afterwards.
+#[test]
+#[ignore]
+fn codex_approvals_real_a_file_edit_and_an_escalation_to_commit_are_allowed_through_harness_answer() {
+    use std::io::{BufRead, Write};
+    const HARNESS: &str = env!("CARGO_BIN_EXE_harness");
+    let codex_home = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| dirs::home_dir().expect("a home folder").join(".codex"));
+    let before = listing(&codex_home);
+    let tmp = tempfile::tempdir().unwrap();
+    let (remote, clone, data) = (tmp.path().join("remote.git"), tmp.path().join("clone"), tmp.path().join("d"));
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").args(args).output().unwrap();
+        assert!(out.status.success(), "git {}: {}", args[0], String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+    git(&["init", "-q", clone.to_str().unwrap()]);
+    let c = clone.to_str().unwrap();
+    // The scratch repo's own config, so a commit there needs no key and names no one.
+    for (key, value) in [("user.name", "Harness Test"), ("user.email", "test@example.invalid"), ("commit.gpgsign", "false")] {
+        git(&["-C", c, "config", key, value]);
+    }
+    git(&["-C", c, "remote", "add", "origin", remote.to_str().unwrap()]);
+    git(&["-C", c, "commit", "-q", "--allow-empty", "-m", "start"]);
+    let work = tmp.path().join("clone+worktrees").join("h7b");
+    git(&["-C", c, "worktree", "add", "-q", work.to_str().unwrap(), "-b", "h7b"]);
+    let work = work.canonicalize().unwrap();
+
+    let token = harness::auth::Token::random().hex();
+    let mut serve = std::process::Command::new(HARNESS)
+        .args(["serve".as_ref(), "--data".as_ref(), data.as_os_str()])
+        .env_remove("HARNESS_DATA")
+        .env_remove(harness::cli::TOKEN_VARIABLE)
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(serve.stdin.take().unwrap(), "{token}").unwrap();
+    let mut said = String::new();
+    std::io::BufReader::new(serve.stderr.take().unwrap()).read_line(&mut said).unwrap();
+    assert!(said.starts_with("harness: serving "), "serve says where it serves: {said}");
+    let client = |args: &[&str]| {
+        let mut command = std::process::Command::new(HARNESS);
+        command.args(args).args(["--token-stdin", "--data"]).arg(&data).env_remove("HARNESS_DATA").env_remove(harness::cli::TOKEN_VARIABLE);
+        command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        command
+    };
+    let given = |command: &mut std::process::Command| {
+        let mut child = command.spawn().unwrap();
+        writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
+        child
+    };
+
+    let prompt = "Create a file named notes.txt that holds exactly the line `hello from codex`. Write it with your file \
+        editing tool (apply_patch), not with a shell command. Then commit it by running exactly `git add notes.txt && git \
+        commit -m 'add notes'`. Git cannot write in your sandbox, so run that commit with escalated permissions and ask \
+        for approval, rather than giving up. Do nothing else, then reply with the word done.";
+    let mut run = given(client(&["run", "--provider", "codex", prompt]).current_dir(&work));
+    let mut said = String::new();
+    std::io::BufReader::new(run.stderr.take().unwrap()).read_line(&mut said).unwrap();
+    let session = said.trim().strip_prefix("harness: session ").unwrap_or_else(|| panic!("run names its session: {said}")).to_owned();
+    let (lines, read) = std::sync::mpsc::channel();
+    let stdout = run.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = lines.send(line);
+        }
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let (mut seen, mut allowed) = (vec![], vec![]);
+    loop {
+        let event: serde_json::Value = match read.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            Ok(line) => serde_json::from_str(&line).unwrap(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = run.kill();
+                panic!("the run took over 600 s: {:?}", seen.iter().map(|event: &serde_json::Value| event["type"].clone()).collect::<Vec<_>>());
+            }
+        };
+        if event["type"] == "permission" {
+            let id = event["id"].as_str().unwrap();
+            let answered = given(&mut client(&["answer", &session, id, "allow"])).wait_with_output().unwrap();
+            assert!(answered.status.success(), "harness answer: {}", String::from_utf8_lossy(&answered.stderr));
+            allowed.push((event["kind"].as_str().unwrap_or_default().to_owned(), event["input"].clone()));
+        }
+        seen.push(event);
+    }
+    let ran = run.wait().unwrap();
+    let shown: Vec<String> = seen.iter().map(|event| format!("{} {}", event["type"].as_str().unwrap_or_default(), event["kind"].as_str().or(event["name"].as_str()).unwrap_or_default())).collect();
+    eprintln!("events: {shown:?}");
+    for (kind, input) in &allowed {
+        eprintln!("allowed {kind}: {}", input["command"].as_str().or(input["reason"].as_str()).unwrap_or_default());
+    }
+    let shut = given(&mut client(&["shutdown"])).wait_with_output().unwrap();
+    assert!(shut.status.success(), "harness shutdown: {}", String::from_utf8_lossy(&shut.stderr));
+    let _ = serve.wait();
+
+    assert!(ran.success(), "the run ended with its turn, and nothing failed");
+    assert!(allowed.iter().any(|(kind, _)| kind == "file_change"), "the file edit asked: {allowed:?}");
+    let commit = allowed.iter().find(|(kind, input)| kind == "command" && input["command"].as_str().is_some_and(|command| command.contains("git commit")));
+    assert!(commit.is_some(), "the commit asked to escalate, with its whole command: {allowed:?}");
+    assert_eq!(std::fs::read_to_string(work.join("notes.txt")).unwrap().trim_end(), "hello from codex", "the file was written");
+    assert_eq!(git(&["-C", work.to_str().unwrap(), "log", "-1", "--format=%s"]), "add notes", "the commit landed");
+    assert_eq!(git(&["-C", work.to_str().unwrap(), "show", "--format=", "--name-only", "HEAD"]), "notes.txt");
+    assert!(working_in(&work).is_empty(), "no process of the session is left");
+
+    let after = listing(&codex_home);
+    let changed: Vec<&String> = after.keys().chain(before.keys()).filter(|name| before.get(*name) != after.get(*name)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    eprintln!("the login folder: {} entries before, {} after; Codex's own records that changed: {changed:?}", before.len(), after.len());
+    assert_eq!(setup_of(&after), setup_of(&before), "the login folder's setup and sign-in are the same, config.toml among them");
+}
