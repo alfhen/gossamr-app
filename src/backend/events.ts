@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import type { Stray } from "../types";
+import type { RunText, Stray } from "../types";
 
 /** The only events Rust sends (`src-tauri/src/wire.rs`); the page listens to nothing else. */
 export const EVENTS = {
@@ -10,13 +10,15 @@ export const EVENTS = {
 } as const;
 
 /** What a `changed` event says changed. */
-export type Topic = "cache" | "proposals" | "runs" | "workstreams" | "watch" | "devLinks" | "assignedElsewhere" | "display" | "connections" | "harness";
+export type Topic = "cache" | "proposals" | "runs" | "workstreams" | "watch" | "devLinks" | "assignedElsewhere" | "display" | "connections" | "harness" | "liveText";
 
 export interface Changed {
   topic: Topic;
   connectionId: string;
   /** With `assignedElsewhere`: the open items assigned to the person in containers they don't watch. */
   strays?: Stray[];
+  /** With `liveText`: a working run's streamed text so far. */
+  live?: RunText;
 }
 
 /** Calls `listener` for each `changed` event of `topic`. Returns an unsubscribe function. */

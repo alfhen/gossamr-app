@@ -203,6 +203,7 @@ No "stop" row of section 5 failed on what was seen: Claude's own setup is honour
   - On a harness restart, stop the orphaned `claude` by pid and start time first: it outlives its client and ends its turn alone. Resume with a fresh token; the old one is refused.
   - Accept events after `result` (a background task's notice) and a turn the agent starts by itself after a background workflow ends. Stop also stops background tasks: with one running, `claude` does not exit on stdin EOF.
   - Check the locked session's `init` tools before answering any tool call; `init` arrives after the first user message.
+  - Stream text from `stream_event` `content_block_delta` lines whose `delta.type` is `text_delta` and whose `parent_tool_use_id` is null (H15): on every native recording each text block streams this way, then arrives whole as an `assistant` line with one `text` block, then `content_block_stop`. Thinking streams as `thinking_delta`, which is not shown. The recordings were redacted with their deltas joined, so on some (`9-trust`) a delta and its block hold different placeholders; only the mock checks that the pieces join to the block.
 - **Codex.**
   - One app-server process per session, so Stop can stop the process tree: `turn/interrupt` leaves a running command alive.
   - Check the version and the shape of `initialize` at start; never set `experimentalApi`; ignore unknown notifications.

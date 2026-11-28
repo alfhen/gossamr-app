@@ -17,6 +17,7 @@ import type {
   RunQuery,
   RunOutcome,
   RunsChanged,
+  RunText,
   AgentSettings,
   HarnessAction,
   HarnessStatus,
@@ -237,6 +238,8 @@ export interface Backend {
   runsRetryLaunch(id: string, options?: { trust?: boolean }): Promise<Run>;
   /** Called when a run was created or changed. Returns an unsubscribe function. */
   onRunsChanged(listener: (change: RunsChanged) => void): () => void;
+  /** Called with a working run's streamed text as it arrives, and with an empty text when its block ended. Returns an unsubscribe function. */
+  onRunText(listener: (live: RunText) => void): () => void;
   /** Called with a run id when a notification should open that run. Returns an unsubscribe function. */
   onOpenRun(listener: (runId: string) => void): () => void;
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket that has an open one gets that one back. */

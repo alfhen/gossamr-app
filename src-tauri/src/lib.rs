@@ -1092,6 +1092,8 @@ pub fn run() {
                 let connect = Arc::new(runs::on_harness::ViaSidecar(sidecar.clone()));
                 let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |connection_id| runs_changed(&runs_changed_too, connection_id));
                 let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(agent::agent_tools::HarnessReads(core.clone())), notifier, changed) });
+                let live_handle = app.handle().clone();
+                link.on_live_text(Arc::new(move |block| wire::live_text(&live_handle, block.connection_id, block.run_id, block.text)));
                 let provider = runs::on_harness::provider(sidecar::mock_script().is_some());
                 service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: provider.into() });
             }

@@ -392,6 +392,11 @@ static GROWING: LazyLock<Vec<DFA>> = LazyLock::new(|| SHAPES.iter().map(|shape| 
 /// What comes before a URL's user and password.
 const SCHEME_END: &str = "://";
 
+/// The most of a block live text holds undecided. Past it, the rest of the block goes out only when the block ends:
+/// each piece is read again from the start of what is held, so a long held stretch would cost time that grows with
+/// its square.
+pub const HOLD_MOST: usize = 16 << 10;
+
 /// One session's streamed block on its way to live clients. `push` takes each piece and gives what may go out now;
 /// `end`, when the block ends, gives the rest.
 pub struct LiveText {
@@ -411,6 +416,9 @@ impl LiveText {
 
     pub fn push(&mut self, piece: &str) -> String {
         self.raw.push_str(piece);
+        if self.raw.len() - self.sent > HOLD_MOST {
+            return String::new();
+        }
         let cut = cut(&self.raw, self.sent, &self.secrets, &mut self.caches);
         self.release(cut)
     }
@@ -740,8 +748,41 @@ mod tests {
         assert_eq!(shown, format!("{MASK} "));
         let shown = live(&["see 90ab", "cdef1234", "5678fedc", " then"], std::slice::from_ref(&token));
         assert_eq!(shown, format!("see {MASK} then"));
-        let mut live = LiveText::new(std::slice::from_ref(&token));
-        assert_eq!(live.push("so: 90abcdef12345678"), "so: ", "a copy that may still grow waits");
+        // A secret with punctuation in it, where a word may end: a copy cut there is held, then masked whole.
+        let dotted = "a1b2.c3d4.e5f6.g7h8.i9j0".to_owned();
+        let shown = live(&["see a1b2.c3d4.", "e5f6.g7h8 then"], std::slice::from_ref(&dotted));
+        assert_eq!(shown, format!("see {MASK} then"));
+        let mut held = LiveText::new(std::slice::from_ref(&token));
+        assert_eq!(held.push("so: 90abcdef12345678"), "so: ", "a copy that may still grow waits");
+    }
+
+    #[test]
+    fn live_text_past_the_most_it_holds_sends_nothing_more_until_the_block_ends() {
+        let mut live = LiveText::new(&[]);
+        assert_eq!(live.push("Here: eyJ"), "Here: ");
+        let blob = noise(50, HOLD_MOST + 10, B64URL);
+        let shown: String = blob.as_bytes().chunks(1000).map(|piece| live.push(std::str::from_utf8(piece).unwrap())).collect();
+        assert_eq!(shown, "", "held, the JWT's start may still grow");
+        assert_eq!(live.push(". more"), "", "past the most it holds, even what decides it waits");
+        assert_eq!(live.end(), text(&format!("eyJ{blob}. more"), &[]), "the rest goes out with the block's end, as stored");
+    }
+
+    #[test]
+    fn live_text_masks_a_marker_inside_a_word_or_after_an_escape_as_the_store_does_wherever_the_pieces_are_cut() {
+        let key = format!("sk-{}", "abcdefghijklmnopqrstuvwxyzabcdefgh");
+        let mut live = LiveText::new(&[]);
+        for block in [
+            "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today".to_owned(),
+            format!("token=%41{key} and on"),
+            format!("line\\n{key} and on"),
+        ] {
+            let stored = text(&block, &[]);
+            assert_eq!(stored.contains(MASK), block.contains(&key), "the store masks the key after an escape, and no path");
+            for shown in every_split(&block, &mut live, true) {
+                assert!(shows(&shown, &key, 3).is_none(), "{block:?} shows {:?} live", shows(&shown, &key, 3));
+                assert!(shown == stored, "a split of {block:?} joined is not the block as stored: {shown:?}");
+            }
+        }
     }
 
     /// The examples of every shape, each with the length of the marker it starts with.

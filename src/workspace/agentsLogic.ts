@@ -181,6 +181,11 @@ export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pi
   return "No update from it yet";
 }
 
+/** The line a card shows of a block as it streams: its last with any text, which is the one being written. */
+export function streamedLine(text: string): string | null {
+  return text.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? null;
+}
+
 /** The Work screen's one filter: only what has something waiting on the person, Needs you's one list. */
 export interface AgentFilters {
   needs: boolean;

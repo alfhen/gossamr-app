@@ -2231,18 +2231,11 @@ impl Task {
     /// clients get one `failed` event and the last `closed`, numbered 0 since no number could be given, and the
     /// session stops; nothing is written after that, even if the store would take it again.
     fn emit(&self, body: Body) -> bool {
-        match &body {
-            Body::TextDelta { text } => {
-                self.delta(text);
-                return true;
-            }
-            // What was held of the block goes out before the block, which replaces it. A text that is not the
-            // streamed block's (a driver that streams one thread and reports another) leaves it streaming.
-            Body::Text { text } => {
-                let rest = Some(self.live_text()).filter(|live| live.is_start_of(text)).map(|mut live| live.end());
-                self.send_delta(rest.unwrap_or_default());
-            }
-            _ => {}
+        // What was held of the block goes out before the block, which replaces it. A text that is not the streamed
+        // block's (a driver that streams one thread and reports another) leaves it streaming.
+        if let Body::Text { text } = &body {
+            let rest = Some(self.live_text()).filter(|live| live.is_start_of(text)).map(|mut live| live.end());
+            self.send_delta(rest.unwrap_or_default());
         }
         // Cut after redaction, so a secret cut in half is masked whole first.
         let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);

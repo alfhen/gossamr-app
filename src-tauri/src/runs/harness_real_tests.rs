@@ -10,6 +10,9 @@
 //! test refuses to run unless the agent's own git would push there. Each permission request is read, and only the
 //! edit and the git line the brief asks for are allowed.
 //!
+//! `claude_on_harness_real_streams` times a streamed block from the harness to the page. Its snapshot of the login is
+//! of metadata only: the login folder's file names, sizes and times, never what a file holds.
+//!
 //! `auto_mode_real` runs a brief in auto mode, the default, and records what auto mode does with a pipe to `sh` and a
 //! push to another remote: `cargo test -p gossamr -- --ignored auto_mode_real --nocapture`. Each request that reaches
 //! the app is denied.
@@ -63,6 +66,32 @@ fn login_snapshot(home: &Path, env: &RunEnv, folders: &[&Path]) -> Vec<String> {
     }
     lines
 }
+
+/// The login folder as files, for a test that reads no file of the login: each file's name, size and time, and each
+/// folder's name, never what any holds. The login is the one the agent's shell gives, as in `login_snapshot`.
+fn login_metadata(home: &Path, env: &RunEnv, _folders: &[&Path]) -> Vec<String> {
+    let folder = env.get("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".claude"));
+    let mut lines: Vec<String> = std::fs::read_dir(&folder)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    match entry.metadata() {
+                        Ok(meta) if meta.is_dir() => format!("{name}/"),
+                        Ok(meta) => format!("{name} {} {:?}", meta.len(), meta.modified().ok()),
+                        Err(_) => format!("{name} unreadable"),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.sort();
+    lines
+}
+
+/// How a chain records the login before and after its run.
+type Snapshot = fn(&Path, &RunEnv, &[&Path]) -> Vec<String>;
 
 /// Processes whose working folder is in `folder`.
 fn working_in(folder: &Path) -> Vec<String> {
@@ -215,6 +244,7 @@ struct Chain {
     worktree: PathBuf,
     remote_before: Vec<String>,
     before: Vec<String>,
+    snapshot: Snapshot,
     fixed: PathBuf,
     sidecar: Arc<Option<Sidecar>>,
     stops: Stops,
@@ -227,7 +257,7 @@ struct Chain {
 
 static CHAINS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn chain(fixed: &str, branch: &str) -> Chain {
+async fn chain(fixed: &str, branch: &str, snapshot: Snapshot) -> Chain {
     let only = CHAINS.lock().await;
     let home = dirs::home_dir().expect("a home folder");
     let binary = super::binary::find_claude().expect("claude is installed");
@@ -296,7 +326,7 @@ async fn chain(fixed: &str, branch: &str) -> Chain {
     let pushes_to = push_url.args(["-C", clone.to_str().unwrap(), "remote", "get-url", "--push", "origin"]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&pushes_to.stdout).trim(), local, "with the person's git settings the agent's push would go elsewhere, so the test does not run");
     let worktree = work_home.join("Gossamr/agents/acme/webshop+worktrees").join(branch);
-    let before = login_snapshot(&home, &env, &[&clone, &worktree]);
+    let before = snapshot(&home, &env, &[&clone, &worktree]);
 
     // The sidecar manager starts the debug harness, as the app does, with its work root in the temp home.
     // SAFETY: set before any harness starts, in a test run on its own; the guard takes it out again.
@@ -316,7 +346,7 @@ async fn chain(fixed: &str, branch: &str) -> Chain {
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), changed)
         .with_home(work_home.clone())
         .with_harness(OnHarness { link: link.clone(), provider: "claude".into() });
-    Chain { home, env, fx, work_home, root, _tmp: tmp, bare, clone, worktree, remote_before, before, fixed, sidecar, stops, link, svc, _only: only }
+    Chain { home, env, fx, work_home, root, _tmp: tmp, bare, clone, worktree, remote_before, before, snapshot, fixed, sidecar, stops, link, svc, _only: only }
 }
 
 impl Chain {
@@ -333,7 +363,7 @@ impl Chain {
         assert_eq!(stopped.state, State::Stopped, "the harness stopped: {:?}", stopped.message);
         drop(self.stops);
         let _ = std::fs::remove_dir_all(&self.fixed);
-        let after = login_snapshot(&self.home, &self.env, &[&self.clone, &self.worktree]);
+        let after = (self.snapshot)(&self.home, &self.env, &[&self.clone, &self.worktree]);
         let changed: Vec<&String> = after.iter().filter(|line| !self.before.contains(line)).collect();
         assert!(changed.is_empty(), "the login changed: {changed:?}");
     }
@@ -342,7 +372,7 @@ impl Chain {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn claude_on_harness_real_a_run_reads_asks_edits_commits_pushes_and_ends_done_on_its_own_branch() {
-    let chain = chain("gossamr-h10e", BRANCH).await;
+    let chain = chain("gossamr-h10e", BRANCH, login_snapshot).await;
     let Chain { fx, bare, clone, worktree, remote_before, link, svc, .. } = &chain;
     // Today's behaviour: this test reads and answers each permission request.
     svc.set_settings(crate::config::AgentSettings { permissions: crate::model_choice::AgentPermissions::Ask, ..svc.settings() }).unwrap();
@@ -442,6 +472,65 @@ async fn claude_on_harness_real_a_run_reads_asks_edits_commits_pushes_and_ends_d
     chain.end().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn claude_on_harness_real_streams_a_block_to_the_page_within_a_second_of_the_harness() {
+    const LIVE_BRANCH: &str = "h15-live";
+    let chain = chain("gossamr-h15", LIVE_BRANCH, login_metadata).await;
+    let Chain { fx, clone, link, svc, before, .. } = &chain;
+    eprintln!("the login folder holds {} entries; they are compared by name, size and time only", before.len());
+    // The page: each block so far, and how long after the harness sent its piece the app had it for the page.
+    let heard = Arc::new(std::sync::Mutex::new(Vec::<(String, i64)>::new()));
+    let page = heard.clone();
+    link.on_live_text(Arc::new(move |block| page.lock().unwrap().push((block.text.to_owned(), chrono::Utc::now().timestamp_millis() - block.sent_ms))));
+
+    let spec = crate::domain::RunSpec {
+        clone_path: clone.clone(),
+        name: LIVE_BRANCH.into(),
+        brief: "Use no tool but Gossamr's result tool. Write three short paragraphs on why a shop's cart button might be blue, then finish with your result: one sentence that sums them up.".into(),
+        report: true,
+        ..crate::domain::fixtures::run_spec()
+    };
+    let queued = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
+    let mut chosen = queued.clone();
+    chosen.runs_on = Some(ModelChoice { instance_id: crate::connections::DEFAULT_CLAUDE.into(), model: "haiku".into(), effort: None });
+    fx.core.save_run(&chosen).await.unwrap();
+    let started = Instant::now();
+    let run = within(120, "starting the run", svc.start_now(&queued.id)).await.unwrap();
+    let session = run.harness_session.clone().unwrap_or_else(|| panic!("opened on the harness: {:?}", run.error));
+    loop {
+        assert!(started.elapsed() < Duration::from_secs(300), "the run did not end in 5 minutes");
+        let now = fx.core.run(&run.id).await.unwrap().expect("the run is kept");
+        match now.state {
+            RunState::Done => break,
+            RunState::Failed | RunState::Stopped | RunState::NeedsAnswer | RunState::NeedsPermission => {
+                let rows: Vec<String> = fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| format!("{}: {}", e.kind, e.text)).collect();
+                panic!("the run came to {:?}: {:?} {:?}\n{rows:#?}", now.state, now.error, now.needs);
+            }
+            _ => {}
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let heard = heard.lock().unwrap().clone();
+    let pieces: Vec<i64> = heard.iter().filter(|(text, _)| !text.is_empty()).map(|(_, late)| *late).collect();
+    let mut sorted = pieces.clone();
+    sorted.sort();
+    eprintln!("{} pieces reached the page; from the harness's send to the page, median {:?} ms, most {:?} ms", pieces.len(), sorted.get(sorted.len() / 2), sorted.last());
+    assert!(pieces.len() > 3, "the block streamed to the page in pieces: {}", pieces.len());
+    assert!(sorted.last().is_some_and(|most| *most < 1000), "a piece reached the page {:?} ms after the harness sent it", sorted.last());
+    assert!(heard.iter().any(|(text, _)| text.is_empty()), "the block's end reached the page");
+    let rows = fx.core.run_events(&run.id).await.unwrap();
+    let longest = heard.iter().map(|(text, _)| text.trim()).max_by_key(|text| text.len()).unwrap_or_default();
+    assert!(rows.iter().any(|row| row.kind == "update" && longest.starts_with(row.text.trim())), "the block's row holds what streamed");
+    within(60, "stopping the session", link.stop(&session)).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+        assert!(Instant::now() < deadline, "the session did not close");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    chain.end().await;
+}
+
 /// What became of a command the brief named: the harness's events for its call, and whether a request for it came.
 fn outcome(events: &[Value], asked: &[(String, Value)], wanted: &str) -> String {
     let named = |input: &Value| input["command"].as_str().is_some_and(|line| line.contains(wanted));
@@ -461,7 +550,7 @@ fn outcome(events: &[Value], asked: &[(String, Value)], wanted: &str) -> String 
 #[ignore]
 async fn auto_mode_real_a_run_edits_and_commits_with_no_request_and_records_a_pipe_to_sh_and_a_push_elsewhere() {
     const AUTO_BRANCH: &str = "h11c-auto";
-    let chain = chain("gossamr-h11c", AUTO_BRANCH).await;
+    let chain = chain("gossamr-h11c", AUTO_BRANCH, login_snapshot).await;
     let Chain { fx, root, bare, clone, worktree, remote_before, link, svc, .. } = &chain;
     assert_eq!(svc.settings().permissions, crate::model_choice::AgentPermissions::Auto, "auto is the default");
     // A second bare remote, named by its URL only, so the clone's config stays as the harness checks it. The pipe to

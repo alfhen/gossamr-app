@@ -853,6 +853,15 @@ export interface RunsChanged {
   connectionId: string;
 }
 
+/**
+ * The `liveText` topic of the `changed` event: what a working run's agent has written of its current block so far,
+ * masked. It is never stored. An empty `text` says the block ended: its row, read next, replaces it.
+ */
+export interface RunText {
+  runId: string;
+  text: string;
+}
+
 /** How the harness beside the app stands (`harness_status`). */
 export interface HarnessStatus {
   state: "starting" | "running" | "stopped" | "failed";

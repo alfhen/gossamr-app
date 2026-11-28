@@ -65,6 +65,8 @@ export interface RunSheetViewProps {
   wide: boolean;
   onWide(): void;
   events: readonly RunEvent[] | null;
+  /** What the agent has streamed of its current block, shown after the timeline until the block's row is read. */
+  streamed?: string | null;
   disk: number | null | "unknown";
   confirmStop: boolean;
   outcome: RunOutcome | null;
@@ -303,7 +305,7 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, answering, opened, trust, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, streamed = null, disk, confirmStop, outcome, answering, opened, trust, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -394,7 +396,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
       <Sec title="What it did" count={events ? `${events.length} ${events.length === 1 ? "entry" : "entries"}` : undefined}>
-        <RunTimeline events={events} live={live} />
+        <RunTimeline events={events} live={live} streamed={run.state === "working" ? streamed : null} />
       </Sec>
 
       <RunWhere run={run} disk={disk} onReveal={on.reveal} />
@@ -419,6 +421,7 @@ export function RunSheet({ id }: { id: string }) {
   const ticket = useWorkspace((s) => (run?.item ? s.items[itemKey(run.item)] : undefined));
   const [wide, setWide] = useState(false);
   const [events, setEvents] = useState<RunEvent[] | null>(null);
+  const streamed = useRuns((s) => s.live[id]?.text ?? null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [stoppedHere, setStoppedHere] = useState(false);
   const [outcome, setOutcome] = useState<RunOutcome | null>(null);
@@ -461,7 +464,8 @@ export function RunSheet({ id }: { id: string }) {
   useEffect(() => {
     let live = true;
     backend?.runsEvents(id).then(
-      (list) => live && setEvents(list),
+      // The rows read now hold a block that ended while it streamed, so it shows once, as its row.
+      (list) => live && (setEvents(list), useRuns.getState().settleLive(id)),
       () => live && setEvents([]),
     );
     return () => {
@@ -503,5 +507,5 @@ export function RunSheet({ id }: { id: string }) {
     },
     openChange: (url) => void openOnGithub(url),
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={false} drafting={drafting} answering={answering} opened={opened} trust={{ trusting, refused }} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} streamed={streamed} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={false} drafting={drafting} answering={answering} opened={opened} trust={{ trusting, refused }} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }

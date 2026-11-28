@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { labelsByRun } from "../lib/workstreamStage";
-import { HANDED_OVER_ASK, type CleanupResult, type ClearFilter, type DeleteResult, type ItemRef, type ModelChoice, type Run } from "../types";
+import { HANDED_OVER_ASK, type CleanupResult, type ClearFilter, type DeleteResult, type ItemRef, type ModelChoice, type Run, type RunText } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { STILL_UNTRUSTED, failureHelp, installUrl, type FailureAct } from "./failureHelp";
@@ -109,6 +109,14 @@ interface RunsState {
   browseOrder: readonly string[] | null;
   /** Runs whose answer went through, with the progress time they had then: "Answer sent" shows until it moves on. */
   answered: Readonly<Record<string, string>>;
+  /**
+   * What each working run's agent has streamed of its current block. One that `ended` stays until the run's timeline is
+   * read again (`settleLive`), which then holds the block's row in its place, so the block never shows twice or not at all.
+   */
+  live: Readonly<Record<string, LiveBlock>>;
+  hearLive(live: RunText): void;
+  /** The run's timeline was read again: a block that ended is in it now. */
+  settleLive(id: string): void;
   init(backend: Backend): void;
   dispose(): void;
   reload(): Promise<void>;
@@ -164,7 +172,13 @@ interface RunsState {
   deleteArchived(id: string, removeWorktree: boolean): Promise<DeleteResult | null>;
 }
 
-const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null };
+/** A run's streamed block as the page shows it until its row is read. */
+export interface LiveBlock {
+  text: string;
+  ended: boolean;
+}
+
+const idle = { live: {} as Readonly<Record<string, LiveBlock>>, runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null };
 
 // Set by needsActions, which can read Needs you; this store cannot import it without a cycle.
 let noticeOpener: ((runId: string) => void) | null = null;
@@ -185,6 +199,12 @@ const DISMISSABLE: readonly Run["state"][] = ["failed", "stopped", "unknown"];
 
 /** Every open permission request on the page, in order, to tell when one was added, answered or withdrawn. */
 const openRequestIds = (runs: readonly Run[]) => runs.flatMap((run) => (run.permissions ?? []).map((p) => answeringKey(run.id, p.id))).join("\n");
+
+/** What streams still shows once the runs are read again: a run's block while it works, and an ended one only on the open sheet, which settles it. */
+function liveOf(live: Readonly<Record<string, LiveBlock>>, runs: readonly Run[], sheet: RunSheetTarget | null): Readonly<Record<string, LiveBlock>> {
+  const kept = Object.entries(live).filter(([id, block]) => runs.some((r) => r.id === id && r.state === "working") && (!block.ended || (sheet?.type === "run" && sheet.id === id)));
+  return kept.length === Object.keys(live).length ? live : Object.fromEntries(kept);
+}
 
 function forgetRecovered(dismissed: ReadonlySet<string>, runs: readonly Run[]): ReadonlySet<string> {
   const recovered = runs.filter((r) => !DISMISSABLE.includes(r.state) && dismissed.has(r.id));
@@ -265,12 +285,25 @@ export const useRuns = create<RunsState>((set, get) => ({
   answered: {},
   ...idle,
 
+  hearLive({ runId, text }) {
+    const was = get().live[runId];
+    if (!text && !was) return;
+    set({ live: { ...get().live, [runId]: text ? { text, ended: false } : { text: was.text, ended: true } } });
+  },
+
+  settleLive(id) {
+    if (!get().live[id]?.ended) return;
+    const { [id]: _settled, ...rest } = get().live;
+    set({ live: rest });
+  },
+
   init(backend) {
     get().dispose();
     set({ backend, ...idle, status: "loading" });
     const offChanged = backend.onRunsChanged(() => void get().reload());
     const offOpen = backend.onOpenRun((id) => (noticeOpener ? noticeOpener(id) : get().openRun(id)));
-    stop = () => (offChanged(), offOpen());
+    const offLive = backend.onRunText((live) => get().hearLive(live));
+    stop = () => (offChanged(), offOpen(), offLive());
     void get().reload();
   },
 
@@ -298,7 +331,7 @@ export const useRuns = create<RunsState>((set, get) => ({
       if (mine === seq) {
         const runs = all.filter((r) => !r.archivedAt);
         const moved = openRequestIds(runs) !== openRequestIds(get().runs);
-        set({ runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs), ...(moved ? { permissionEpoch: get().permissionEpoch + 1 } : {}) });
+        set({ live: liveOf(get().live, runs, get().sheet), runs, archived: all.filter((r) => r.archivedAt), status: "ready", error: null, dismissed: forgetRecovered(get().dismissed, runs), ...(moved ? { permissionEpoch: get().permissionEpoch + 1 } : {}) });
         forgetSettledAnswers(runs);
         announceFailedLaunches(get, set);
       }
