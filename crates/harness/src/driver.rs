@@ -165,6 +165,9 @@ pub struct Link {
     /// The agent's process, kept for the session's start so a harness after this one can stop it if it outlives the
     /// session. None for a driver whose agent is no process of its own.
     pub process: Option<crate::process::Process>,
+    /// What the agent started that its driver has noted, for a driver whose agent's commands can leave its group: kept on
+    /// record with the agent, so a harness after this one can stop them too. None for a driver that notes none.
+    pub tree: Option<tokio::sync::watch::Receiver<Vec<crate::process::Process>>>,
 }
 
 /// How an agent's process ended, as its driver saw it.

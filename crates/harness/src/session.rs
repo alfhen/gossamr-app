@@ -894,7 +894,7 @@ impl Harness {
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = endpoints.register(&endpoint, (id, start), &token, (tools, result_schema.clone()), calls, &provider);
-        let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
+        let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs(), id);
         let schema = result_schema.clone();
         let launch = Launch { cwd, locked, model, login, effort, permissions, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
@@ -1008,7 +1008,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     // Those whose record could not be read, or whose end or giving up could not be written: none of them may be resumed.
     let (mut pending, mut checked) = (vec![], vec![]);
     for id in ids {
-        let crate::store::Recorded { agent, boot, worktree } = match store.agent(&id) {
+        let crate::store::Recorded { agent, boot, worktree, tree } = match store.agent(&id) {
             Ok(Some(found)) => found,
             Ok(None) => continue,
             Err(_) => {
@@ -1022,33 +1022,41 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
             (Some(was), Some(now)) if was != now => Leftover::Gone(FOUND_GONE),
             // Which boot it was is not known, so its start time proves nothing: only a pid and group that no longer
             // exist do.
-            (None, _) | (_, None) => match nothing_has(agent.pid) {
+            (None, _) | (_, None) => match nothing_has(agent.pid) && tree.iter().all(|left| nothing_has(left.pid)) {
                 true => Leftover::Gone(FOUND_GONE),
                 false => Leftover::Kept("it was recorded with no boot, and its pid or its group still answers"),
             },
-            // Its tree first, while the agent still leads it: a command it started in a group of its own, as Codex's
-            // are, is no member of its group. Each only while its pid still has its start time.
+            // Its tree first, while the agent still leads it, and what its driver noted: a command it started in a group
+            // of its own, as Codex's are, is no member of its group.
             _ if alive(&agent) => {
-                let tree = crate::process::descendants(&agent);
-                for member in &tree {
-                    let _ = signal(member, libc::SIGKILL);
-                    crate::process::kill_led_group(member);
+                let mut found = crate::process::descendants(&agent);
+                for left in tree {
+                    if !found.contains(&left) {
+                        found.push(left);
+                    }
                 }
-                match kill_group(&agent) {
-                    Ok(()) => Leftover::Sent(std::iter::once(agent.clone()).chain(tree).collect()),
-                    Err(_) => Leftover::Kept("the harness could not kill its group"),
+                let noted = kill_noted(&found, worktree.as_deref());
+                match (kill_group(&agent), noted) {
+                    (Ok(()), Ok(noted)) => Leftover::Sent(std::iter::once(agent.clone()).chain(noted).chain(kill_marked(&id, &agent, worktree.as_deref())).collect()),
+                    (Err(_), _) => Leftover::Kept("the harness could not kill its group"),
+                    (Ok(()), Err(why)) => Leftover::Kept(why),
                 }
             }
-            // A group outlives its leader: what the agent started may still work in its worktree.
-            _ => match left_of(&agent, worktree.as_deref()) {
-                Left::Nothing => Leftover::Gone(FOUND_GONE),
-                Left::Ours(members) => {
+            // A group outlives its leader: what the agent started may still work in its worktree. What its driver noted
+            // is all that leads to a command in a group of its own once the agent has exited.
+            // What the system took in only once nothing else keeps the session given up on.
+            _ => match (kill_noted(&tree, worktree.as_deref()), left_of(&agent, worktree.as_deref())) {
+                (Err(why), _) | (_, Left::Unknown(why)) => Leftover::Kept(why),
+                (Ok(noted), Left::Nothing) => {
+                    let sent: Vec<_> = noted.into_iter().chain(kill_marked(&id, &agent, worktree.as_deref())).collect();
+                    if sent.is_empty() { Leftover::Gone(FOUND_GONE) } else { Leftover::Sent(sent) }
+                }
+                (Ok(noted), Left::Ours(members)) => {
                     for member in &members {
                         let _ = signal(member, libc::SIGKILL);
                     }
-                    Leftover::Sent(members)
+                    Leftover::Sent(members.into_iter().chain(noted).chain(kill_marked(&id, &agent, worktree.as_deref())).collect())
                 }
-                Left::Unknown(why) => Leftover::Kept(why),
             },
         };
         checked.push((id, agent, worktree, check));
@@ -1079,6 +1087,55 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     }
 }
 
+/// Kills what a leftover's stored `tree` leads to: each that still runs, only while its pid has its start time, with the
+/// group it leads; and the members of the group of each that has exited, as `left_of` takes a dead leader's, in its
+/// `worktree`. Those it sent a kill, or why one may be the person's: a stored pid can be hours old, and lead another
+/// group by now.
+fn kill_noted(tree: &[crate::process::Process], worktree: Option<&std::path::Path>) -> std::result::Result<Vec<crate::process::Process>, &'static str> {
+    use crate::process::{Left, alive, kill_led_group, left_of, signal};
+    let (mut sent, mut kept) = (vec![], None);
+    for left in tree {
+        if alive(left) {
+            if signal(left, libc::SIGKILL).unwrap_or(false) {
+                sent.push(left.clone());
+            }
+            kill_led_group(left);
+            continue;
+        }
+        match left_of(left, worktree) {
+            Left::Nothing => {}
+            Left::Ours(members) => {
+                for member in members {
+                    if signal(&member, libc::SIGKILL).unwrap_or(false) {
+                        sent.push(member);
+                    }
+                }
+            }
+            Left::Unknown(why) => kept = Some(why),
+        }
+    }
+    kept.map_or(Ok(sent), Err)
+}
+
+/// Kills what session `id`'s `agent` started in its `worktree` that runs on with the session's mark, each by pid and
+/// start time, parents first. Those it sent a kill.
+fn kill_marked(id: &str, agent: &crate::process::Process, worktree: Option<&std::path::Path>) -> Vec<crate::process::Process> {
+    let Some(worktree) = worktree else { return vec![] };
+    let mut sent: Vec<crate::process::Process> = vec![];
+    // Twice: a process may have forked after the first listing, before it was killed.
+    for _ in 0..2 {
+        let listed = crate::process::marked_in(worktree, agent.started, id);
+        #[cfg(any(test, feature = "testing"))]
+        crate::process::seam::marked_listed(id);
+        for left in listed {
+            if !sent.contains(&left) && crate::process::signal(&left, libc::SIGKILL).unwrap_or(false) {
+                sent.push(left);
+            }
+        }
+    }
+    sent
+}
+
 /// Whether the group `agent` led is empty by `until`, once `sent` were killed: it is listed again, and what a member
 /// forked meanwhile is killed too, a few times. If not, why.
 fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, sent: &[crate::process::Process], until: std::time::Instant) -> std::result::Result<(), &'static str> {
@@ -1102,6 +1159,15 @@ fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, 
         }
     }
     Err("its group kept gaining processes after each kill")
+}
+
+/// The driver's noted tree each time it changes; never, for a driver that notes none or once it has stopped.
+async fn tree_changed(tree: &mut Option<tokio::sync::watch::Receiver<Vec<crate::process::Process>>>) -> Vec<crate::process::Process> {
+    let Some(noted) = tree else { return std::future::pending().await };
+    match noted.changed().await {
+        Ok(()) => noted.borrow_and_update().clone(),
+        Err(_) => std::future::pending().await,
+    }
 }
 
 /// How long the leftovers a harness kills as it starts have, all of them, to be gone before their sessions stay given up.
@@ -1172,9 +1238,10 @@ fn given_up(store: &Store, id: &str, what: &str) -> String {
     }
 }
 
-/// The environment an agent gets: the harness's own, without a client token.
-pub fn agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
-    vars.filter(|(name, _)| name != crate::cli::TOKEN_VARIABLE).collect()
+/// The environment session `id`'s agent gets: the harness's own, without a client token, and with the session's mark.
+pub fn agent_env(vars: impl Iterator<Item = (OsString, OsString)>, id: &str) -> Vec<(OsString, OsString)> {
+    let theirs = |name: &OsString| name == crate::cli::TOKEN_VARIABLE || name == crate::process::SESSION_VARIABLE;
+    vars.filter(|(name, _)| !theirs(name)).chain([(crate::process::SESSION_VARIABLE.into(), id.into())]).collect()
 }
 
 /// What a start opens.
@@ -1624,6 +1691,7 @@ impl Task {
                         break 'run false;
                     }
                 },
+                tree = tree_changed(&mut link.tree) => self.keep_tree(&tree),
                 granted = async { waiting.as_mut().expect("the branch runs only while waiting").await },
                     if waiting.is_some() && turn == Turn::Idle => {
                     waiting = None;
@@ -1836,7 +1904,18 @@ impl Task {
         if stopped {
             self.wait_until_gone(&mut link, caps, turn).await;
         }
+        // A tree the driver sent as its output closed, which neither loop read once it saw the close.
+        if let Some(noted) = link.tree.as_mut()
+            && noted.has_changed().unwrap_or(true)
+        {
+            let tree = noted.borrow_and_update().clone();
+            self.keep_tree(&tree);
+        }
         drop(slot);
+        // A job a command sent to the background and left may run on in no tree or group the driver noted.
+        if let Ok(Some(crate::store::Recorded { agent, worktree, .. })) = self.inner.with_store(|store| store.agent(&self.id)) {
+            kill_marked(&self.id, &agent, worktree.as_deref());
+        }
         // The driver closed its output, so its agent is gone, but what the agent started may outlive it in its group.
         let group_left = match link.process.as_ref() {
             Some(agent) => !group_gone_by(agent, std::time::Instant::now() + LEFTOVER_EXIT).await,
@@ -1912,7 +1991,18 @@ impl Task {
     /// closed. The agent's own end of a turn a diagnostic already ended is passed over.
     async fn drain(&self, link: &mut Link, limit: Option<Duration>, going: &mut Going) -> bool {
         let gone = async {
-            while let Some(body) = link.output.recv().await {
+            loop {
+                // What the agent starts while it stops is kept too: a group that outlives the stop keeps the record.
+                let body = tokio::select! {
+                    body = link.output.recv() => match body {
+                        Some(body) => body,
+                        None => break,
+                    },
+                    tree = tree_changed(&mut link.tree) => {
+                        self.keep_tree(&tree);
+                        continue;
+                    }
+                };
                 match &body {
                     Body::Permission { .. } | Body::PermissionClosed { .. } => continue,
                     Body::Started { .. } => {
@@ -2195,6 +2285,14 @@ impl Task {
         }
         drop(watchers);
         let _ = self.events.send(event);
+    }
+
+    /// Keeps what the driver noted beside the agent, so a harness after this one finds what it started once it has
+    /// exited. The driver sends a tree only when it changes, so one the store would not take breaks the session.
+    fn keep_tree(&self, tree: &[crate::process::Process]) {
+        if let Err(e) = self.inner.with_store(|store| store.set_agent_tree(&self.id, tree)) {
+            self.store_failed(&e);
+        }
     }
 
     /// Breaks the session on a store that failed: its clients get one `failed`, numbered 0, and it stops.
@@ -2511,7 +2609,7 @@ mod tests {
             let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
             if self.deaf.load(Ordering::Relaxed) {
                 drop(received);
-                return Ok(Link { commands, output: receiver, process: None });
+                return Ok(Link { commands, output: receiver, process: None, tree: None });
             }
             tokio::spawn(async move {
                 while let Some(command) = received.recv().await {
@@ -2527,7 +2625,7 @@ mod tests {
                     }
                 }
             });
-            Ok(Link { commands, output: receiver, process: None })
+            Ok(Link { commands, output: receiver, process: None, tree: None })
         }
     }
 
@@ -2600,7 +2698,7 @@ mod tests {
                 }
                 drop(output);
             });
-            Ok(Link { commands, output: receiver, process: None })
+            Ok(Link { commands, output: receiver, process: None, tree: None })
         }
     }
 

@@ -321,6 +321,70 @@ pub fn descendants(process: &Process) -> Vec<Process> {
     found
 }
 
+/// The variable a session's agent starts with, set to the session's id. What its commands start inherits it, and what
+/// you start in the session's worktree does not, so it tells the agent's orphans from yours.
+pub const SESSION_VARIABLE: &str = "GOSSAMR_SESSION";
+
+/// What `session`'s agent started that runs on: every process of yours that started at or after `since`, works in a
+/// folder inside `worktree` and started with the session's own `SESSION_VARIABLE`, whoever its parent is now. That is
+/// a job a command sent to the background before it exited, which neither the agent's tree nor any group it noted leads
+/// to any more, and what that job started in turn. Parents come before their children, so a parent that restarts a
+/// child it lost, as a process supervisor does, is gone first. A command that clears its environment is not found, nor
+/// what it starts.
+pub fn marked_in(worktree: &std::path::Path, since: u64, session: &str) -> Vec<Process> {
+    let Ok(within) = std::fs::canonicalize(worktree) else { return vec![] };
+    let mark = format!("{SESSION_VARIABLE}={session}");
+    let found: Vec<(Process, Option<u32>)> = all_pids()
+        .into_iter()
+        .filter(|pid| *pid != std::process::id())
+        .filter_map(|pid| {
+            let started = started_of(pid).filter(|started| *started >= since)?;
+            if !cwd_of(pid)?.starts_with(&within) {
+                return None;
+            }
+            let marked = environ_of(pid)?.split(|b| *b == 0).take_while(|entry| !entry.is_empty()).any(|entry| entry == mark.as_bytes());
+            marked.then_some((Process { pid, started }, parent_of(pid)))
+        })
+        .collect();
+    // How many of `found` lead from `pid` to one whose parent is none of them, `pid` included; a loop stops at their count.
+    let of = |pid: u32| found.iter().find(|(process, _)| process.pid == pid);
+    let depth = |pid: u32| std::iter::successors(Some(pid), |pid| of(*pid)?.1.filter(|parent| of(*parent).is_some())).take(found.len()).count();
+    let mut ordered: Vec<(usize, Process)> = found.iter().map(|(process, _)| (depth(process.pid), process.clone())).collect();
+    ordered.sort_by_key(|(depth, _)| *depth);
+    ordered.into_iter().map(|(_, process)| process).collect()
+}
+
+/// The environment `pid` was started with, each entry ending in a NUL. Only your own processes can be read.
+#[cfg(target_os = "macos")]
+fn environ_of(pid: u32) -> Option<Vec<u8>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, libc::c_int::try_from(pid).ok()?];
+    let mut size: libc::size_t = 0;
+    // SAFETY: with no buffer, the call only writes the size it needs to `size`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    let mut args = vec![0u8; size];
+    // SAFETY: `args` is as large as `size` says, and the call fills at most that much and says how much in `size`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, args.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    args.truncate(size);
+    // argc, the executable's path, NULs to align, argc arguments, then the environment.
+    let argc = usize::try_from(i32::from_ne_bytes(args.get(..4)?.try_into().ok()?)).ok()?;
+    let mut rest = &args[4..];
+    rest = &rest[rest.iter().position(|b| *b == 0)?..];
+    rest = &rest[rest.iter().position(|b| *b != 0)?..];
+    for _ in 0..argc {
+        rest = &rest[rest.iter().position(|b| *b == 0)? + 1..];
+    }
+    Some(rest.to_vec())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn environ_of(pid: u32) -> Option<Vec<u8>> {
+    std::fs::read(format!("/proc/{pid}/environ")).ok()
+}
+
 #[cfg(target_os = "macos")]
 fn children_of(parent: u32) -> Vec<u32> {
     const MAX: usize = 1024;
@@ -345,6 +409,47 @@ fn children_of(parent: u32) -> Vec<u32> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn children_of(_parent: u32) -> Vec<u32> {
     vec![]
+}
+
+#[cfg(target_os = "macos")]
+fn all_pids() -> Vec<u32> {
+    // SAFETY: with no buffer, the call only says how many pids there are.
+    let now = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    // Room for those started since.
+    let mut pids = vec![0 as libc::pid_t; usize::try_from(now).unwrap_or(0) + 256];
+    let size = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())).unwrap_or(0);
+    // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
+    let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
+    pids.truncate(usize::try_from(count).unwrap_or(0).min(pids.len()));
+    pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).collect()
+}
+
+#[cfg(target_os = "linux")]
+fn all_pids() -> Vec<u32> {
+    let Ok(all) = std::fs::read_dir("/proc") else { return vec![] };
+    all.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn all_pids() -> Vec<u32> {
+    vec![]
+}
+
+#[cfg(target_os = "macos")]
+fn parent_of(pid: u32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `info` is as large as `size` says, and the call fills at most that much.
+    let got = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size) };
+    // SAFETY: the call filled the whole struct.
+    (got == size).then(|| unsafe { info.assume_init() }.pbi_ppid)
+}
+
+/// Field 4 of `/proc/<pid>/stat`.
+#[cfg(not(target_os = "macos"))]
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+    stat_tail(&stat)?.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
@@ -487,6 +592,19 @@ pub mod seam {
         static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
         static HIDES: RefCell<Option<bool>> = const { RefCell::new(None) };
         static REFUSING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+        static AFTER_MARKED: RefCell<HashMap<String, Box<dyn FnOnce()>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Runs `hook` once, after the first listing of what session `session`'s agent left and before its kills, as a
+    /// process that forks in that moment does.
+    pub fn after_marked_listing(session: &str, hook: impl FnOnce() + 'static) {
+        AFTER_MARKED.with(|hooks| hooks.borrow_mut().insert(session.to_owned(), Box::new(hook)));
+    }
+
+    pub fn marked_listed(session: &str) {
+        if let Some(hook) = AFTER_MARKED.with(|hooks| hooks.borrow_mut().remove(session)) {
+            hook();
+        }
     }
 
     /// Makes `pid` answer as a process the harness may not signal, as another user's does, once it has gone too.

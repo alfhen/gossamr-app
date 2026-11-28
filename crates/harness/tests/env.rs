@@ -5,23 +5,27 @@ mod common;
 use common::*;
 use harness::cli::TOKEN_VARIABLE;
 use harness::event::Body;
+use harness::process::SESSION_VARIABLE;
 
 #[test]
-fn env_an_agent_gets_the_harness_environment_without_a_client_token() {
+fn env_an_agent_gets_the_harness_environment_without_a_client_token_and_with_its_own_sessions_mark() {
     // SAFETY: the only test in this binary, before its runtime or any other thread starts.
     unsafe {
         std::env::set_var(TOKEN_VARIABLE, "a-client-token-the-agent-must-not-see");
         std::env::set_var("HARNESS_ENV_TEST_MARK", "kept");
+        std::env::set_var(SESSION_VARIABLE, "the-session-that-started-this-harness");
     }
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         let (_tmp, dir) = data_dir();
         let mock = mock("{\"prompt\": null}");
         let harness = harness(&dir, &mock, 4);
-        let (_, mut events) = open(&harness, false).await;
+        let (id, mut events) = open(&harness, false).await;
         let Body::Started { provider_session, .. } = next(&mut events).await.body else { panic!("expected started") };
         let env = mock.env(&provider_session);
         assert!(!env.iter().any(|(name, _)| name == TOKEN_VARIABLE), "no client token in the agent's environment");
         assert!(env.iter().any(|(name, value)| name == "HARNESS_ENV_TEST_MARK" && value == "kept"), "the rest is passed on");
+        let marks: Vec<_> = env.iter().filter(|(name, _)| name == SESSION_VARIABLE).map(|(_, value)| value.to_str()).collect();
+        assert_eq!(marks, [Some(id.as_str())], "its own session's mark, in place of the harness's");
     });
 }

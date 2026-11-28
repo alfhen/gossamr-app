@@ -236,6 +236,16 @@ impl CodexDriver {
         let mut command = tokio::process::Command::new(&binary);
         command.arg("app-server").env_clear().envs(launch.env.iter().map(|(k, v)| (k, v))).current_dir(&launch.cwd);
         command.process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        // On Linux, app-server takes in what its commands orphan, so a command that double-forks stays in its tree
+        // while it runs. The setting outlives exec, and macOS has none like it.
+        #[cfg(target_os = "linux")]
+        // SAFETY: prctl is async-signal-safe and touches only the child's own setting.
+        unsafe {
+            command.pre_exec(|| match libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) {
+                0 => Ok(()),
+                _ => Err(std::io::Error::last_os_error()),
+            });
+        }
         let mut child = command.spawn().map_err(|e| OpenError { kind: FailKind::Provider, message: format!("codex could not be started: {e}") })?;
         let pid = child.id().expect("a child that was just spawned has a pid");
         let Some(started) = (self.started_of)(pid) else {
@@ -261,9 +271,10 @@ impl CodexDriver {
             }
         });
         let rpc = Rpc::new(lines, output, &launch);
-        let agent = Agent { child: Some(child), process: process.clone(), rpc, term_after: self.term_after, kill_after: self.stop_takes_up_to, setup_within: self.setup_within, stderr: (stderr, last_said), end, sent: vec![], tree: vec![] };
+        let (noted, tree) = tokio::sync::watch::channel(vec![]);
+        let agent = Agent { child: Some(child), process: process.clone(), rpc, term_after: self.term_after, kill_after: self.stop_takes_up_to, setup_within: self.setup_within, stderr: (stderr, last_said), end, sent: vec![], tree: vec![], noted };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
-        Ok(Link { commands, output: output_rx, process: Some(process) })
+        Ok(Link { commands, output: output_rx, process: Some(process), tree: Some(tree) })
     }
 }
 
@@ -280,6 +291,8 @@ struct Agent {
     sent: Vec<libc::c_int>,
     /// What app-server has started, noted while it runs: a command it leaves running is not in its group.
     tree: Vec<Process>,
+    /// Where `tree` goes each time it changes, for the session to keep on record.
+    noted: tokio::sync::watch::Sender<Vec<Process>>,
 }
 
 impl Agent {
@@ -415,6 +428,11 @@ impl Agent {
                 self.tree.push(found);
             }
         }
+        self.noted.send_if_modified(|noted| {
+            let changed = *noted != self.tree;
+            noted.clone_from(&self.tree);
+            changed
+        });
     }
 
     fn kill(&mut self) {
