@@ -88,6 +88,7 @@ pub const AGENT_STOPPING: &str = "Its agent is still stopping.";
 
 /// Why Resume here and the resume command refuse a run.
 pub const NOT_HANDED_OVER: &str = "It isn't handed over to Terminal.";
+pub const HARNESS_UNREACHABLE: &str = "Gossamr can't reach the harness, so it can't tell whether its agent has stopped. Try again in a moment.";
 pub const TAKEN_BACK_ALREADY: &str = "Gossamr has taken this session back already. Resume here to go on with it.";
 
 /// Why Attach refuses a run in a turn.
@@ -111,6 +112,18 @@ fn claim_holds(claim: &std::path::Path, pid: u32, resumed_by: Option<&str>) -> b
 /// started after the claim, and one that isn't yours never ran Gossamr's script.
 fn claimed_by(pid: u32, claimed_at: Option<u64>, resumed_by: Option<&str>) -> bool {
     yours(pid) && claimed_at.zip(harness::process::started_at(pid)).is_some_and(|(at, started)| started <= at) && resumed_by.is_none_or(|id| harness::process::may_name_id(pid, id))
+}
+
+/// A process other than the harness's agents that holds the provider session `resumed_by` of `run`: one that names
+/// its id, or a provider's program in its worktree but for Claude's own worktrees inside it.
+fn holder_of(run: &Run, resumed_by: &str) -> Option<u32> {
+    let markers: Vec<&str> = harness::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
+    let folder = session_folder(run);
+    harness::process::holding(resumed_by, &folder, &markers, &[], &[folder.join(".claude").join("worktrees")])
+}
+
+fn already_in_terminal(pid: u32) -> String {
+    format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first.")
 }
 
 /// Whether pid `pid` runs and is yours to signal: another user's process answers that it may not be.
@@ -767,10 +780,8 @@ impl RunService {
                 if opened.is_some_and(|at| at.elapsed() < self.terminal_grace) {
                     return Err(Error::Proposal(TERMINAL_OPENING_AGAIN.into()));
                 }
-                let markers: Vec<&str> = harness::provider::Provider::ALL.iter().flat_map(|provider| provider.markers().iter().copied()).collect();
-                let skip = [session_folder(run).join(".claude").join("worktrees")];
-                if let Some(pid) = harness::process::holding(&resumed_by, &session_folder(run), &markers, &[], &skip) {
-                    return Err(Error::Proposal(format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first.")));
+                if let Some(pid) = holder_of(run, &resumed_by) {
+                    return Err(Error::Proposal(already_in_terminal(pid)));
                 }
             }
             if follow.closed {
@@ -831,6 +842,11 @@ impl RunService {
                     return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}. Terminal didn't open.", plain_refusal(&why, session).trim_end_matches('.'))));
                 }
             }
+            // Once the harness's agent has gone, nothing else may hold it: a `claude` you started from a copied command
+            // has no claim, and two would write the session.
+            if let Some(pid) = holder_of(run, &resumed_by) {
+                return Err(Error::Proposal(already_in_terminal(pid)));
+            }
             let tc = self.observing_toolchain(run).await?;
             let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
             let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
@@ -847,7 +863,7 @@ impl RunService {
             }
             for (claim, pid) in super::control::attempts(&dir, &run.id).claimed {
                 if claim_holds(&claim, pid, Some(&resumed_by)) {
-                    return Err(Error::Proposal(format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first.")));
+                    return Err(Error::Proposal(already_in_terminal(pid)));
                 }
                 let _ = std::fs::remove_file(claim);
             }
@@ -874,11 +890,11 @@ impl RunService {
             return Err(Error::Proposal(AGENT_STOPPING.into()));
         }
         // The harness's own word, as the app may read it closed while its agent still runs; with no listing, no command.
-        let listed = link.listed(session).await;
-        if listed.as_ref().is_some_and(|row| row["handed_over"] == false) {
+        let Some(listed) = link.listed(session).await else { return Err(Error::Proposal(HARNESS_UNREACHABLE.into())) };
+        if listed["handed_over"] == false {
             return Err(Error::Proposal(TAKEN_BACK_ALREADY.into()));
         }
-        if !listed.is_some_and(|row| row["running"] != true) {
+        if listed["running"] == true {
             return Err(Error::Proposal(AGENT_STOPPING.into()));
         }
         if let Some(why) = link.kept(session).await {

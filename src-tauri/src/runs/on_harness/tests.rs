@@ -2770,6 +2770,30 @@ async fn hand_over_resume_here_waits_while_terminals_script_has_claimed_the_sess
 }
 
 #[tokio::test]
+async fn hand_over_open_in_terminal_refuses_beside_a_claude_you_started_on_a_session_the_harness_runs() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    let provider = rig.fx.core.session_run(&session).await.unwrap().unwrap().1.provider_session.unwrap();
+    // The resume command you copied during an earlier hand-over, run by you: no claim of Gossamr's names it.
+    let mut yours = naming(&provider).await;
+    let pid = yours.id().unwrap();
+    assert_eq!(rig.svc.attach(&run.id).await.unwrap_err().to_string(), already_in_terminal(pid));
+    assert!(rig.opened.0.lock().unwrap().is_empty(), "no second Terminal");
+    yours.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn hand_over_resume_command_says_so_when_the_harness_cant_be_reached() {
+    let mut served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, _) = handed_over_done(&served).await;
+    served.shut_down().await;
+    assert_eq!(rig.svc.resume_command(&run.id).await.unwrap_err().to_string(), HARNESS_UNREACHABLE);
+}
+
+#[tokio::test]
 async fn hand_over_a_claim_holds_only_your_own_process_that_started_no_later_than_the_claim() {
     let id = "4c1a2b3d-0000-4000-8000-00000000c1a1";
     let mut shell = naming(id).await;
@@ -2870,7 +2894,12 @@ async fn taken_back_unheard(rig: &Rig, served: &Served, session: &str) {
 /// A process that names `provider` in its arguments, as the harness's real agent does, once the check sees it
 /// steadily. Its shell waits in a builtin, so it starts no child that could show its arguments for a moment.
 async fn naming(provider: &str) -> tokio::process::Child {
-    let held = tokio::process::Command::new("/bin/sh").args(["-c", "read _", "sh", "--resume", provider]).stdin(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
+    naming_while(provider, "read _").await
+}
+
+/// `naming`, whose shell runs `wait`, a builtin, and ends with it.
+async fn naming_while(provider: &str, wait: &str) -> tokio::process::Child {
+    let held = tokio::process::Command::new("/bin/sh").args(["-c", wait, "sh", "--resume", provider]).stdin(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
     let pid = held.id().unwrap();
     tokio::time::timeout(WAIT, async {
         let mut since: Option<std::time::Instant> = None;
@@ -2889,16 +2918,18 @@ async fn naming(provider: &str) -> tokio::process::Child {
 
 #[tokio::test]
 async fn hand_over_after_a_take_back_the_app_missed_opens_terminal_though_the_harnesss_own_agent_names_the_session() {
-    let served = Served::new(TWO_TURNS, 4);
+    // An agent slow to go after a Stop, so the one standing in for it below has gone first, as a real agent has by the
+    // time the harness says it closed.
+    let served = Served::new(&format!("{{\"stops_after_ms\": 3000}}\n{TWO_TURNS}"), 4);
     let (rig, run, session, provider) = handed_over_done(&served).await;
     taken_back_unheard(&rig, &served, &session).await;
     // The mock's agent is no process; this one stands in for the real one, `claude ... --resume <id>`.
-    let mut agent = naming(&provider).await;
+    let mut agent = naming_while(&provider, "read -t 1 _").await;
     rig.svc.attach(&run.id).await.unwrap();
     assert_eq!(rig.opened.0.lock().unwrap().len(), 2, "Terminal opened");
     assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "once the harness's agent had gone");
     assert!(rig.get(&run).await.handed_over);
-    agent.kill().await.unwrap();
+    let _ = agent.kill().await;
 }
 
 #[tokio::test]
