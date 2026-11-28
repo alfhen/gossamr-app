@@ -591,6 +591,28 @@ async fn codex_at_a_sessions_end_what_its_agent_left_in_its_worktree_goes_with_w
 }
 
 #[tokio::test]
+async fn codex_at_a_sessions_end_what_forks_after_the_first_listing_of_what_its_agent_left_goes_too() {
+    let (tmp, data) = data_dir();
+    let (out, worktree) = (tmp.path().join("out"), tmp.path().join("clone+worktrees").join("b"));
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let harness = harness_on(&data, Store::open(&data).unwrap(), &[], &out);
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "b".into(), clone: tmp.path().join("clone") };
+    let (id, mut events) = harness.open(Open { provider: "codex".into(), cwd: worktree.clone(), work: Some(work), ..Open::default() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    let (_, listed) = left_by_a_shell(&worktree, Some(&id));
+    let forked: Arc<std::sync::Mutex<Option<Process>>> = Arc::default();
+    let (hook_forked, folder, session) = (forked.clone(), worktree.clone(), id.clone());
+    process::seam::after_marked_listing(&id, move || *hook_forked.lock().unwrap() = Some(left_by_a_shell(&folder, Some(&session)).1));
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    let forked = forked.lock().unwrap().clone().expect("the first listing was taken");
+    gone(&listed, "what the first listing found").await;
+    gone(&forked, "what started after it").await;
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
     // As `npm run dev &`: the command's shell exits, and the server it started lives on in the shell's group, no child of
     // app-server's any more.

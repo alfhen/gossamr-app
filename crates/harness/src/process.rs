@@ -592,6 +592,19 @@ pub mod seam {
         static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
         static HIDES: RefCell<Option<bool>> = const { RefCell::new(None) };
         static REFUSING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+        static AFTER_MARKED: RefCell<HashMap<String, Box<dyn FnOnce()>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Runs `hook` once, after the first listing of what session `session`'s agent left and before its kills, as a
+    /// process that forks in that moment does.
+    pub fn after_marked_listing(session: &str, hook: impl FnOnce() + 'static) {
+        AFTER_MARKED.with(|hooks| hooks.borrow_mut().insert(session.to_owned(), Box::new(hook)));
+    }
+
+    pub fn marked_listed(session: &str) {
+        if let Some(hook) = AFTER_MARKED.with(|hooks| hooks.borrow_mut().remove(session)) {
+            hook();
+        }
     }
 
     /// Makes `pid` answer as a process the harness may not signal, as another user's does, once it has gone too.

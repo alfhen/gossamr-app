@@ -1124,7 +1124,10 @@ fn kill_marked(id: &str, agent: &crate::process::Process, worktree: Option<&std:
     let mut sent: Vec<crate::process::Process> = vec![];
     // Twice: a process may have forked after the first listing, before it was killed.
     for _ in 0..2 {
-        for left in crate::process::marked_in(worktree, agent.started, id) {
+        let listed = crate::process::marked_in(worktree, agent.started, id);
+        #[cfg(any(test, feature = "testing"))]
+        crate::process::seam::marked_listed(id);
+        for left in listed {
             if !sent.contains(&left) && crate::process::signal(&left, libc::SIGKILL).unwrap_or(false) {
                 sent.push(left);
             }
