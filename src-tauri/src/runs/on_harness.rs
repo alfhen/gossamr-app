@@ -98,6 +98,27 @@ fn with_way_out(refusal: &str, run: &Run) -> String {
     super::service::fresh::with_clone_way_out(refusal, &run.spec.clone_path)
 }
 
+/// Whether the shell that claimed a Terminal's marker in the file `claim`, pid `pid`, still holds the session
+/// `resumed_by`. The rename that claimed it set the file's change time.
+fn claim_holds(claim: &std::path::Path, pid: u32, resumed_by: Option<&str>) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let claimed_at = std::fs::symlink_metadata(claim).ok().and_then(|meta| u64::try_from(meta.ctime()).ok());
+    claimed_by(pid, claimed_at, resumed_by)
+}
+
+/// Whether pid `pid` is still the shell that claimed a marker at `claimed_at`, or the `claude --resume` it became:
+/// yours, started no later than the claim, and naming the session `resumed_by`. A process that took its pid since
+/// started after the claim, and one that isn't yours never ran Gossamr's script.
+fn claimed_by(pid: u32, claimed_at: Option<u64>, resumed_by: Option<&str>) -> bool {
+    yours(pid) && claimed_at.zip(harness::process::started_at(pid)).is_some_and(|(at, started)| started <= at) && resumed_by.is_none_or(|id| harness::process::may_name_id(pid, id))
+}
+
+/// Whether pid `pid` runs and is yours to signal: another user's process answers that it may not be.
+fn yours(pid: u32) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether the process exists and may be signalled.
+    libc::pid_t::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0)
+}
+
 /// Whether the harness says it no longer holds `session` handed over, as after a take back the app missed. A harness
 /// that doesn't say, or a listing that fails, counts as not.
 async fn taken_elsewhere(link: &Link, session: &str) -> bool {
@@ -634,8 +655,12 @@ impl RunService {
         }
         // Read after the removals: a script either lost to them, or claimed first and is named here. While the process
         // a claim names runs, it is Terminal's `claude`, or about to be, whether a scan can read it yet or not.
+        let resumed_by = match self.core.session_run(session).await {
+            Ok(found) => found.and_then(|(_, follow)| follow.provider_session),
+            Err(e) => return Some(Err(e)),
+        };
         for (claim, pid) in super::control::attempts(&dir, &run.id).claimed {
-            if super::terminal_open::alive(pid) {
+            if claim_holds(&claim, pid, resumed_by.as_deref()) {
                 for marker in &removed {
                     let _ = std::fs::write(marker, b"");
                 }
@@ -809,7 +834,7 @@ impl RunService {
             let tc = self.observing_toolchain(run).await?;
             let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
             let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
-            let words = vec!["--resume".to_owned(), resumed_by];
+            let words = vec!["--resume".to_owned(), resumed_by.clone()];
             // Only while it is still handed over: the run's lock keeps a take back out, and this checks it held.
             if !self.load(&run.id).await?.handed_over {
                 return Err(Error::Proposal(TAKEN_BACK_FIRST.into()));
@@ -821,7 +846,7 @@ impl RunService {
                 let _ = std::fs::remove_file(marker);
             }
             for (claim, pid) in super::control::attempts(&dir, &run.id).claimed {
-                if super::terminal_open::alive(pid) {
+                if claim_holds(&claim, pid, Some(&resumed_by)) {
                     return Err(Error::Proposal(format!("Claude already runs it in Terminal (pid {pid}). Use that window, or quit it there first.")));
                 }
                 let _ = std::fs::remove_file(claim);

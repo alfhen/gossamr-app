@@ -521,11 +521,16 @@ impl Player {
             if let Some(at) = self.stopping_at {
                 let slow = tokio::time::sleep_until(at);
                 tokio::pin!(slow);
-                // A Kill that comes meanwhile ends it at once.
+                // A Kill that comes meanwhile ends it at once; whatever comes is received all the same.
                 loop {
                     tokio::select! {
                         _ = &mut slow => return Got::Stopped,
-                        next = self.commands.recv() => if matches!(next, None | Some(Command::Kill)) { return Got::Stopped },
+                        next = self.commands.recv() => {
+                            let Some(command) = next else { return Got::Stopped };
+                            if self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone())).is_none() || command == Command::Kill {
+                                return Got::Stopped;
+                            }
+                        }
                     }
                 }
             }
@@ -727,5 +732,17 @@ mod tests {
         old.commands.send(Command::Prompt("stale".into())).unwrap();
         assert_eq!(old.output.recv().await, None, "the old start went, and played nothing");
         assert!(mock.received(&provider_session).is_empty(), "the stale prompt is not the new start's");
+    }
+
+    #[tokio::test]
+    async fn mock_a_kill_during_a_slow_stop_ends_it_at_once_and_both_are_received_in_order() {
+        let mock = Mock::new(Script::parse("{\"stops_after_ms\": 60000}\n{\"prompt\": null}").unwrap());
+        let mut agent = mock.open(launch(None)).unwrap();
+        let Some(Body::Started { provider_session, .. }) = agent.output.recv().await else { panic!() };
+        agent.commands.send(Command::Stop).unwrap();
+        agent.commands.send(Command::Prompt("late".into())).unwrap();
+        agent.commands.send(Command::Kill).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), agent.output.recv()).await.unwrap(), None, "the Kill ended it");
+        assert_eq!(mock.received(&provider_session), [Command::Stop, Command::Prompt("late".into()), Command::Kill]);
     }
 }

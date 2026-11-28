@@ -54,6 +54,25 @@ pub fn started_of(pid: u32) -> Option<u64> {
     Some(now.saturating_sub(elapsed))
 }
 
+/// When `pid` started, in whole seconds since the epoch, as a file's times are kept; none when there is no such
+/// process.
+#[cfg(target_os = "linux")]
+pub fn started_at(pid: u32) -> Option<u64> {
+    let ticks = started_of(pid)?;
+    // SAFETY: sysconf only reads a limit.
+    let hz = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|hz| *hz > 0)?;
+    let stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let booted: u64 = stat.lines().find_map(|line| line.strip_prefix("btime "))?.trim().parse().ok()?;
+    Some(booted + ticks / hz)
+}
+
+/// When `pid` started, in whole seconds since the epoch, as a file's times are kept; none when there is no such
+/// process.
+#[cfg(not(target_os = "linux"))]
+pub fn started_at(pid: u32) -> Option<u64> {
+    started_of(pid)
+}
+
 /// Whether the run's own process is still there: the pid answers and started when the run says it did.
 pub fn alive(process: &Process) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
@@ -216,6 +235,12 @@ pub fn program_name(pid: u32) -> Option<String> {
 /// Whether `pid`'s arguments name the session id `id`, as a word of their own.
 pub fn names_id(pid: u32, id: &str) -> bool {
     id.len() >= ID_LEAST && args_of(pid).is_some_and(|args| args.iter().skip(1).any(|arg| holds_word(arg, id)))
+}
+
+/// Whether `pid`'s arguments may name the session id `id`: they do, or they can't be read, as for some milliseconds
+/// while it becomes another program.
+pub fn may_name_id(pid: u32, id: &str) -> bool {
+    id.len() >= ID_LEAST && args_of(pid).is_none_or(|args| args.iter().skip(1).any(|arg| holds_word(arg, id)))
 }
 
 /// The shortest provider id the check looks for in other processes' arguments.
@@ -740,6 +765,19 @@ pub mod seam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_started_at_is_on_the_clock_a_files_times_are_kept_by() {
+        let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let mut child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let started = started_at(child.id());
+        let after = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let _ = child.kill();
+        let _ = child.wait();
+        // Whole seconds, and a boot time Linux keeps in whole seconds too.
+        assert!(started.is_some_and(|started| started + 1 >= before && started <= after), "{started:?} not in {before}..={after}");
+        assert_eq!(started_at(child.id()), None, "none once it has gone");
+    }
 
     #[test]
     fn every_providers_session_id_is_long_enough_for_the_check_to_look_for_it() {

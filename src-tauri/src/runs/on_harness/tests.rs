@@ -2754,9 +2754,10 @@ async fn hand_over_a_second_open_in_terminal_waits_while_the_first_terminal_stil
 #[tokio::test]
 async fn hand_over_resume_here_waits_while_terminals_script_has_claimed_the_session_and_its_process_lives() {
     let served = Served::new(TWO_TURNS, 4);
-    let (rig, run, _session, _) = handed_over_done(&served).await;
-    // As the script does just before `exec`, named by its pid, however long ago and whether a scan can read it or not.
-    let mut claiming = tokio::process::Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+    let (rig, run, _session, provider) = handed_over_done(&served).await;
+    // As the script does just before `exec`, named by its pid, however long ago: the shell runs a script named by the
+    // session's id, as the `claude` it becomes is.
+    let mut claiming = naming(&provider).await;
     let pid = claiming.id().unwrap();
     let marker = rig.svc.terminal_marker(&run).unwrap();
     std::fs::rename(&marker, format!("{}.claimed.{pid}", marker.display())).unwrap();
@@ -2769,9 +2770,41 @@ async fn hand_over_resume_here_waits_while_terminals_script_has_claimed_the_sess
 }
 
 #[tokio::test]
-async fn hand_over_a_second_open_in_terminal_retires_the_first_so_its_late_script_never_starts_claude() {
+async fn hand_over_a_claim_holds_only_your_own_process_that_started_no_later_than_the_claim() {
+    let id = "4c1a2b3d-0000-4000-8000-00000000c1a1";
+    let mut shell = naming(id).await;
+    let pid = shell.id().unwrap();
+    let started = harness::process::started_at(pid).unwrap();
+    assert!(claimed_by(pid, Some(started), Some(id)), "the shell that claimed it, or the claude it became");
+    assert!(!claimed_by(pid, Some(started - 2), Some(id)), "a process that started after the claim took its pid since");
+    assert!(!claimed_by(pid, None, Some(id)), "a claim that can't be read holds nothing");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    assert!(!claimed_by(1, Some(now), None), "another user's process never ran Gossamr's script");
+    assert!(yours(pid) && !yours(1), "launchd answers, but isn't yours");
+    shell.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn hand_over_a_claim_whose_pid_another_process_took_since_holds_nothing() {
     let served = Served::new(TWO_TURNS, 4);
     let (rig, run, _session, _) = handed_over_done(&served).await;
+    // Terminal's shell has gone, and its pid now runs something that names no session.
+    let mut other = tokio::process::Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+    let pid = other.id().unwrap();
+    while harness::process::may_name_id(pid, "0123456789abcdef-not-this-one") {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let marker = rig.svc.terminal_marker(&run).unwrap();
+    std::fs::rename(&marker, format!("{}.claimed.{pid}", marker.display())).unwrap();
+    assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "taken back");
+    assert!(crate::runs::control::attempts(&rig.svc.terminal_dir(), &run.id).claimed.is_empty(), "the stale claim is cleared");
+    other.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn hand_over_a_second_open_in_terminal_retires_the_first_so_its_late_script_never_starts_claude() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, provider) = handed_over_done(&served).await;
     let first = rig.opened.0.lock().unwrap()[0].clone();
     let first_marker = rig.svc.terminal_marker(&run).unwrap();
     rig.svc.attach(&run.id).await.unwrap();
@@ -2783,7 +2816,7 @@ async fn hand_over_a_second_open_in_terminal_retires_the_first_so_its_late_scrip
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), crate::runs::control::TAKEN_BACK_HERE, "{}", String::from_utf8_lossy(&ran.stderr));
     assert!(second_marker.exists(), "and can't claim the second one's");
     // While a script that claimed it lives, there is no second Terminal.
-    let mut claiming = tokio::process::Command::new("/bin/sleep").arg("30").kill_on_drop(true).spawn().unwrap();
+    let mut claiming = naming(&provider).await;
     let pid = claiming.id().unwrap();
     std::fs::rename(&second_marker, format!("{}.claimed.{pid}", second_marker.display())).unwrap();
     let refused = rig.svc.attach(&run.id).await.unwrap_err().to_string();
